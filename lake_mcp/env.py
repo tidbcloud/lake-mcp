@@ -1,0 +1,134 @@
+"""Environment configuration for the Lake MCP server."""
+
+import os
+from dataclasses import dataclass
+from enum import Enum
+
+
+class TransportType(Enum):
+    """Transport types for MCP server."""
+
+    STDIO = "stdio"
+    HTTP = "http"
+    SSE = "sse"
+
+    @classmethod
+    def values(cls):
+        """Get all transport type values."""
+        return [member.value for member in cls]
+
+
+@dataclass
+class LakeMCPConfig:
+    """Configuration for TiDB Cloud Lake connection settings.
+
+    Required environment variables:
+        LAKE_DSN: The DSN connection string (defaults to: "lake://default:@127.0.0.1:8000/?sslmode=disable")
+        LOCAL_MODE: Enable local mode to use the in-memory engine (defaults to: "false")
+        LAKE_QUERY_TIMEOUT: Query execution timeout in seconds (defaults to: "300")
+        LAKE_MCP_SAFE_MODE: Enable sandbox safety validation (defaults to: "true")
+    """
+
+    def __init__(self):
+        """Initialize the configuration from environment variables."""
+        pass
+
+    @property
+    def dsn(self) -> str:
+        """Get the TiDB Cloud Lake DSN connection string."""
+        return os.environ.get("LAKE_DSN", "lake://default:@127.0.0.1:8000/?sslmode=disable")
+
+    @property
+    def local_mode(self) -> bool:
+        """Get the local mode setting."""
+        return os.environ.get("LOCAL_MODE", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+            "on",
+        )
+
+    @property
+    def mcp_server_transport(self) -> str:
+        """Get the MCP server transport method.
+
+        Valid options: "stdio", "http", "sse"
+        Default: "stdio"
+        """
+        transport = os.getenv("LAKE_MCP_SERVER_TRANSPORT", TransportType.STDIO.value).lower()
+
+        # Validate transport type
+        if transport not in TransportType.values():
+            valid_options = ", ".join(f'"{t}"' for t in TransportType.values())
+            raise ValueError(f"Invalid transport '{transport}'. Valid options: {valid_options}")
+        return transport
+
+    @property
+    def mcp_bind_host(self) -> str:
+        """Get the MCP server bind host for HTTP/SSE transports.
+
+        Default: "127.0.0.1"
+        """
+        return os.getenv("LAKE_MCP_BIND_HOST", "127.0.0.1")
+
+    @property
+    def mcp_bind_port(self) -> int:
+        """Get the MCP server bind port for HTTP/SSE transports.
+
+        Default: 8001
+        """
+        port_str = os.getenv("LAKE_MCP_BIND_PORT", "8001")
+        try:
+            port = int(port_str)
+            if port < 1 or port > 65535:
+                raise ValueError(f"Port must be between 1 and 65535, got {port}")
+            return port
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(f"Invalid port value '{port_str}'. Must be a valid integer.")
+            raise
+
+    @property
+    def safe_mode(self) -> bool:
+        """Get the MCP SQL safety mode setting.
+
+        Default: True. Set LAKE_MCP_SAFE_MODE=false to disable sandbox validation.
+        """
+        value = os.environ.get("LAKE_MCP_SAFE_MODE", "true").lower()
+        if value in ("true", "1", "yes", "on"):
+            return True
+        if value in ("false", "0", "no", "off"):
+            return False
+        raise ValueError(f"Invalid LAKE_MCP_SAFE_MODE value '{value}'. Use true or false.")
+
+    @property
+    def query_timeout(self) -> int:
+        """Get the query execution timeout in seconds.
+
+        Default: 300
+        """
+        timeout_str = os.getenv("LAKE_QUERY_TIMEOUT", "300")
+        try:
+            timeout = int(timeout_str)
+            if timeout < 1:
+                raise ValueError(f"Query timeout must be greater than 0, got {timeout}")
+            return timeout
+        except ValueError as e:
+            if "invalid literal" in str(e):
+                raise ValueError(f"Invalid query timeout value '{timeout_str}'. Must be a valid integer.")
+            raise
+
+
+# Global instance placeholder for the singleton pattern
+_CONFIG_INSTANCE = None
+
+
+def get_config():
+    """
+    Gets the singleton instance of LakeMCPConfig.
+    Instantiates it on the first call.
+    """
+    global _CONFIG_INSTANCE
+    if _CONFIG_INSTANCE is None:
+        _CONFIG_INSTANCE = LakeMCPConfig()
+    return _CONFIG_INSTANCE

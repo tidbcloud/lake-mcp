@@ -1,0 +1,59 @@
+[project]
+name = "lake-mcp"
+version = "0.3.2"
+description = "An MCP server for TiDB Cloud Lake."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "TiDB Cloud" },
+]
+maintainers = [
+    { name = "TiDB Cloud" },
+]
+license = "Apache-2.0"
+keywords = ["mcp", "lake", "database", "sql", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "databend>=1.2.810",
+    "tidbcloudlake-driver>=0.27.3",
+    "fastmcp>=2.12.3",
+    "pyarrow>=21.0.0",
+    "python-dotenv>=1.1.0",
+    "lmdb>=1.5.1",
+    "sqlparse>=0.5.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/tidbcloud/lake-mcp"
+Repository = "https://github.com/tidbcloud/lake-mcp"
+Documentation = "https://github.com/tidbcloud/lake-mcp#readme"
+Issues = "https://github.com/tidbcloud/lake-mcp/issues"
+
+[project.scripts]
+lake-mcp = "lake_mcp.main:main"
+
+[dependency-groups]
+dev = [
+    "mcp[cli]>=1.9.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["lake_mcp*"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+lint.select = ["E", "F", "I", "N", "Q", "T", "W"]
+lint.ignore = []
