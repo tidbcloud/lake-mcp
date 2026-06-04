@@ -258,18 +258,6 @@ wheels = [
 ]
 
 [[package]]
-name = "databend-driver"
-version = "0.27.3"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/09/17d5ff6592e0422df95844289dd68b8c135bea032fd16c497758210eed4c/databend_driver-0.27.3-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c27965362cbaa08d3a3d1322c190436b27b359f30fd834b9cba7835ac4d88a74", size = 6384238, upload-time = "2025-05-21T09:26:58.55Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/32/f44bfe1d3d34c9b68b332d134ef9f0c83d0ed1cc4ac602e1e23b81736345/databend_driver-0.27.3-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:02a9933be1a7cfe7ddb7abe1564156b78f49750afe53c40208e56cc09b0ff4d8", size = 5853844, upload-time = "2025-05-21T09:27:01.086Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/19/206fd1ce3700a4bb181a4e1995b84269514e1bcfaa4d44d693a2e43f446e/databend_driver-0.27.3-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4e1ac2fd4f3d454ad34decc68e2d00b60de021d93bca28fb458b1d897e72c2e4", size = 6629637, upload-time = "2025-05-21T09:27:02.931Z" },
-    { url = "https://files.pythonhosted.org/packages/49/da/2ba432f59c669cff87a865c9582df0a39dac6372a2f587647de70542891f/databend_driver-0.27.3-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:47343f80ab78055a9a5ef6dd19872488b7f754c23d423716f7a11c30cc2626a0", size = 6094358, upload-time = "2025-05-21T09:27:04.71Z" },
-    { url = "https://files.pythonhosted.org/packages/18/6a/bb63f22368b7d487bc73ade86ff335c68150cf7e803941da89654277e051/databend_driver-0.27.3-cp37-abi3-win_amd64.whl", hash = "sha256:eac4d86d952f8d55ac81666418abe5e6a463aa233cd4ee7a0bc446e081566c90", size = 6595759, upload-time = "2025-05-21T09:27:06.527Z" },
-]
-
-[[package]]
 name = "dnspython"
 version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -450,6 +438,43 @@ wheels = [
 ]
 
 [[package]]
+name = "lake-mcp"
+version = "0.3.2"
+source = { editable = "." }
+dependencies = [
+    { name = "databend" },
+    { name = "fastmcp" },
+    { name = "lmdb" },
+    { name = "pyarrow" },
+    { name = "python-dotenv" },
+    { name = "sqlparse" },
+    { name = "tidbcloudlake-driver" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mcp", extra = ["cli"] },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "databend", specifier = ">=1.2.810" },
+    { name = "fastmcp", specifier = ">=2.12.3" },
+    { name = "lmdb", specifier = ">=1.5.1" },
+    { name = "pyarrow", specifier = ">=21.0.0" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "sqlparse", specifier = ">=0.5.5" },
+    { name = "tidbcloudlake-driver", specifier = ">=0.27.3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
+    { name = "ruff", specifier = ">=0.1.0" },
+]
+
+[[package]]
 name = "lazy-object-proxy"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -578,43 +603,6 @@ wheels = [
 cli = [
     { name = "python-dotenv" },
     { name = "typer" },
-]
-
-[[package]]
-name = "mcp-databend"
-version = "0.3.2"
-source = { editable = "." }
-dependencies = [
-    { name = "databend" },
-    { name = "databend-driver" },
-    { name = "fastmcp" },
-    { name = "lmdb" },
-    { name = "pyarrow" },
-    { name = "python-dotenv" },
-    { name = "sqlparse" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mcp", extra = ["cli"] },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "databend", specifier = ">=1.2.810" },
-    { name = "databend-driver", specifier = ">=0.27.3" },
-    { name = "fastmcp", specifier = ">=2.12.3" },
-    { name = "lmdb", specifier = ">=1.5.1" },
-    { name = "pyarrow", specifier = ">=21.0.0" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
-    { name = "sqlparse", specifier = ">=0.5.5" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
-    { name = "ruff", specifier = ">=0.1.0" },
 ]
 
 [[package]]
@@ -1130,14 +1118,27 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.46.2"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ce/20/08dfcd9c983f6a6f4a1000d934b9e6d626cff8d2eeb77a89a68eef20a2b7/starlette-0.46.2.tar.gz", hash = "sha256:7f7361f34eed179294600af672f565727419830b54b7b084efe44bb82d2fccd5", size = 2580846, upload-time = "2025-04-13T13:56:17.942Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/a3/84e821cc54b4ab50ae6dbc6ac3800a651b65ec35f045cc73785380654057/starlette-1.0.1.tar.gz", hash = "sha256:512399c5f1de7fac99c88572212ded9ddeddef2fb32afa82d724000e88b38f4f", size = 2659596, upload-time = "2026-05-21T21:58:58.433Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/0c/9d30a4ebeb6db2b25a841afbb80f6ef9a854fc3b41be131d249a977b4959/starlette-0.46.2-py3-none-any.whl", hash = "sha256:595633ce89f8ffa71a015caed34a5b2dc1c0cdb3f0f1fbd1e69339cf2abeec35", size = 72037, upload-time = "2025-04-13T13:56:16.21Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/e1/b2df4bc09a1e51ff664c1e17018a4274b42e5e9352e4a478ea540512dc88/starlette-1.0.1-py3-none-any.whl", hash = "sha256:7c0e69b2ee1c848bd54669d908500117a3ee13de603a21427e5c6fc1adf98dcd", size = 72802, upload-time = "2026-05-21T21:58:56.551Z" },
+]
+
+[[package]]
+name = "tidbcloudlake-driver"
+version = "0.34.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/11/da/547451401c0d69b0fd6e7dd889e37b091b7c9b2b9846a6d298e5e28223c4/tidbcloudlake_driver-0.34.0.tar.gz", hash = "sha256:5ebbe80d91c2260bfadfb7a135b68df2cf6e1cc9285306bebdb9b642ec91f0b2", size = 159966, upload-time = "2026-06-04T08:25:43.164Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/e0/a96927ea41ed34c5a4ee3b02fc05ca6b84c9fbccf2c0a3c8f097ecafedc9/tidbcloudlake_driver-0.34.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:81a6437efc0c6c7597cab1bdf370dbc6ae174bf6f09537a061bdaefcc79a6637", size = 8902657, upload-time = "2026-06-04T08:25:34.442Z" },
+    { url = "https://files.pythonhosted.org/packages/89/96/edfd0aedc55b7b6a160a3dc647e9aa133263311a17a15d9f14c9989334cd/tidbcloudlake_driver-0.34.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:719493265477ec5b90176011cb347b37e0d56ae9d9812f5e57b19d4b669a2ca7", size = 8260849, upload-time = "2026-06-04T08:25:36.479Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/9e/c1e997f13db3fe232670a786482a6ed445ed73fd14389653b5d4d89e0ce9/tidbcloudlake_driver-0.34.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:553a23ffa804b4735ee65b9479540d88c6d4b446df04bbaf9830d46e557f6b52", size = 9397258, upload-time = "2026-06-04T08:25:38.497Z" },
+    { url = "https://files.pythonhosted.org/packages/35/72/258c7c98f87f5d70d12552c86207571ed629b141f2eaa0b546c5e12343e4/tidbcloudlake_driver-0.34.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:07b8ee5b6cde316688f192fda331c3c4ad1b638edfa4780e9714131d157f0e43", size = 8762947, upload-time = "2026-06-04T08:25:40.912Z" },
 ]
 
 [[package]]
