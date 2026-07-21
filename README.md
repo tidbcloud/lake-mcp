@@ -1,6 +1,6 @@
 # MCP Server for TiDB Cloud Lake
 
-[![PyPI - Version](https://img.shields.io/pypi/v/lake-mcp)](https://pypi.org/project/lake-mcp)
+[![PyPI - Version](https://img.shields.io/pypi/v/tidbcloudlake-mcp)](https://pypi.org/project/tidbcloudlake-mcp)
 
 Connect AI agents to your TiDB Cloud Lake database safely. Session sandbox keeps production read-only while agents experiment. Works with Codex, Cursor, Claude Code, Gemini CLI, and any MCP-compatible client.
 
@@ -20,7 +20,7 @@ Connect AI agents to your TiDB Cloud Lake database safely. Session sandbox keeps
   "mcpServers": {
     "lake-mcp": {
       "command": "uv",
-      "args": ["tool", "run", "--from", "lake-mcp@latest", "lake-mcp"],
+      "args": ["tool", "run", "--from", "tidbcloudlake-mcp@latest", "lake-mcp"],
       "env": {
         "LAKE_DSN": "lake://user:password@host:port/database?warehouse=your_warehouse"
       }
@@ -35,7 +35,7 @@ Connect AI agents to your TiDB Cloud Lake database safely. Session sandbox keeps
 ```bash
 codex mcp add lake-mcp \
   --env LAKE_DSN='lake://user:password@host:port/database?warehouse=your_warehouse' \
-  -- uv tool run --from lake-mcp@latest lake-mcp
+  -- uv tool run --from tidbcloudlake-mcp@latest lake-mcp
 ```
 
 </details>
@@ -46,7 +46,7 @@ codex mcp add lake-mcp \
 ```bash
 claude mcp add lake-mcp \
   --env LAKE_DSN='lake://user:password@host:port/database?warehouse=your_warehouse' \
-  -- uv tool run --from lake-mcp@latest lake-mcp
+  -- uv tool run --from tidbcloudlake-mcp@latest lake-mcp
 ```
 
 </details>
@@ -54,13 +54,13 @@ claude mcp add lake-mcp \
 <details>
 <summary>Cursor</summary>
 
-Add a new MCP server with command `uv tool run --from lake-mcp@latest lake-mcp`, then set `LAKE_DSN` in the env section.
+Add a new MCP server with command `uv tool run --from tidbcloudlake-mcp@latest lake-mcp`, then set `LAKE_DSN` in the env section.
 
 ```json
 {
   "mcpServers": {
     "lake-mcp": {
-      "command": "uv tool run --from lake-mcp@latest lake-mcp",
+      "command": "uv tool run --from tidbcloudlake-mcp@latest lake-mcp",
       "env": {
         "LAKE_DSN": "lake://user:password@host:port/database?warehouse=your_warehouse"
       },

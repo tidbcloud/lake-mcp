@@ -1,5 +1,5 @@
 [project]
-name = "lake-mcp"
+name = "tidbcloudlake-mcp"
 version = "0.3.2"
 description = "An MCP server for TiDB Cloud Lake."
 readme = "README.md"
