@@ -1,5 +1,6 @@
 # MCP Server for TiDB Cloud Lake
 
+
 [![PyPI - Version](https://img.shields.io/pypi/v/tidbcloudlake-mcp)](https://pypi.org/project/tidbcloudlake-mcp)
 
 Connect AI agents to your TiDB Cloud Lake database safely. Session sandbox keeps production read-only while agents experiment. Works with Codex, Cursor, Claude Code, Gemini CLI, and any MCP-compatible client.
