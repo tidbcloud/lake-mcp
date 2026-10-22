@@ -40,3 +40,31 @@ def test_fastmcp_client_can_discover_and_call_lake_tools(monkeypatch):
             assert prefix.data["prefix"] == server.get_session_prefix()
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    ("package", "minimum"),
+    [
+        ("fastmcp", "3.2.0"),
+        ("mcp", "1.28.1"),
+        ("pyarrow", "23.0.1"),
+        ("sqlparse", "0.6.0"),
+        ("cryptography", "50.0.0"),
+        ("urllib3", "2.8.0"),
+        ("python-multipart", "0.0.30"),
+        ("starlette", "1.3.1"),
+    ],
+)
+def test_installed_and_locked_dependencies_meet_security_floors(package, minimum):
+    import importlib.metadata
+    import tomllib
+    from pathlib import Path
+
+    from packaging.version import Version
+
+    assert Version(importlib.metadata.version(package)) >= Version(minimum)
+    lock = tomllib.loads((Path(__file__).parents[1] / "uv.lock").read_text())
+    versions = [entry["version"] for entry in lock["package"] if entry["name"] == package]
+    assert versions, f"{package} missing from lockfile"
+    # Check every environment marker branch, not only the current interpreter.
+    assert all(Version(version) >= Version(minimum) for version in versions)
