@@ -643,7 +643,7 @@ class TestEdgeCases:
         assert result.allowed is True
 
     def test_merge_into_non_sandbox_blocked(self):
-        sql = "MERGE INTO production.target USING {get_session_prefix()}db.source ON target.id = source.id"
+        sql = f"MERGE INTO production.target USING {get_session_prefix()}db.source ON target.id = source.id"
         result = check_sql_safety(sql)
         assert result.allowed is False
 
