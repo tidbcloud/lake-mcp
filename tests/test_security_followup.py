@@ -32,6 +32,8 @@ def test_bypasses_are_denied(template):
 @pytest.mark.parametrize(
     "template",
     [
+        "CREATE TABLE {p}db.t (default_role STRING)",
+        "ALTER TABLE {p}db.t ADD COLUMN default_role STRING",
         "INSERT INTO {p}db.t VALUES ('grant', ')', 'CREATE OR REPLACE TABLE production.t')",
         "ALTER TABLE `{p}db`.`t` RENAME TO `t.with.dot`",
         "INSERT INTO `{p}db`.`t` SELECT * FROM `{p}db`.`a`, `{p}db`.`b`",

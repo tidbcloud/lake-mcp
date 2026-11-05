@@ -988,7 +988,7 @@ def _check_single_statement(sql: str) -> SafetyResult:
             if result.allowed and main and verb not in {"SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN"}:
                 if _contains_non_sandbox_reference(sql_std, session_prefix):
                     return SafetyResult(False, "CTE write references non-sandbox objects")
-            if result.allowed and verb in {"CREATE", "ALTER"}:
+            if result.allowed and _sql_search(r"^(?:CREATE|ALTER)\s+USER\b", statement, re.IGNORECASE):
                 for i, token in enumerate(tokens):
                     if token.kind != "word" or token.text.upper() != "DEFAULT_ROLE":
                         continue
