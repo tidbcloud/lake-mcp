@@ -109,109 +109,35 @@ def _skip_quoted(sql: str, start: int) -> int | None:
 
 
 def _split_sql_statements(sql: str) -> list[str] | None:
-    """Split SQL text into statements on top-level semicolons.
+    """Split on semicolon tokens using the same lexer as the SQL safety rules."""
+    try:
+        tokens = _sql_tokens(sql)
+    except ValueError:
+        return None
 
-    String literals, quoted identifiers, line/block comments and dollar-quoted
-    bodies ($$ ... $$) are skipped so a semicolon inside them never starts a new
-    statement. Returns None when the input cannot be tokenized unambiguously
-    (unterminated quote or block comment); callers must treat that as a denial.
-    """
-    statements: list[str] = []
-    current: list[str] = []
-    index = 0
-    length = len(sql)
-
-    while index < length:
-        char = sql[index]
-
-        if char in _QUOTE_CHARS:
-            end = _skip_quoted(sql, index)
-            if end is None:
-                return None
-            current.append(sql[index:end])
-            index = end
-            continue
-
-        if char == "$":
-            dollar_match = _DOLLAR_QUOTE_RE.match(sql, index)
-            if dollar_match:
-                tag = dollar_match.group(0)
-                end = sql.find(tag, dollar_match.end())
-                if end == -1:
-                    return None
-                end += len(tag)
-                current.append(sql[index:end])
-                index = end
-                continue
-
-        if sql.startswith("--", index):
-            # Line comment: skip to the end of the line, newline stays in the statement.
-            end = sql.find("\n", index)
-            index = length if end == -1 else end
-            continue
-
-        if sql.startswith("/*", index):
-            end = sql.find("*/", index + 2)
-            if end == -1:
-                return None
-            end += 2
-            current.append(sql[index:end])
-            index = end
-            continue
-
-        if char == ";":
-            statements.append("".join(current))
-            current = []
-            index += 1
-            continue
-
-        current.append(char)
-        index += 1
-
-    statements.append("".join(current))
-    return [statement.strip() for statement in statements if statement.strip()]
+    statements = []
+    start = None
+    end = 0
+    for token in tokens:
+        if token.kind == "symbol" and token.text == ";":
+            if start is not None:
+                statements.append(sql[start:end])
+                start = None
+        else:
+            if start is None:
+                start = token.start
+            end = token.end
+    if start is not None:
+        statements.append(sql[start:end])
+    return statements
 
 
 def has_top_level_separator(sql: str) -> bool:
-    """Return True when `sql` contains a ``;`` outside literals and comments.
-
-    Tool arguments that are interpolated as a SQL *expression* (the SHOW
-    ``filter``) may legitimately contain ``;``, ``--`` or ``/*`` inside a string
-    literal, so callers cannot just search the raw text. Unterminated literals or
-    comments count as a separator (fail closed).
-    """
-    index = 0
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        if char in _QUOTE_CHARS:
-            end = _skip_quoted(sql, index)
-            if end is None:
-                return True
-            index = end
-            continue
-        if char == "$":
-            dollar_match = _DOLLAR_QUOTE_RE.match(sql, index)
-            if dollar_match:
-                end = sql.find(dollar_match.group(0), dollar_match.end())
-                if end == -1:
-                    return True
-                index = end + len(dollar_match.group(0))
-                continue
-        if sql.startswith("--", index):
-            end = sql.find("\n", index)
-            index = length if end == -1 else end
-            continue
-        if sql.startswith("/*", index):
-            end = sql.find("*/", index + 2)
-            if end == -1:
-                return True
-            index = end + 2
-            continue
-        if char == ";":
-            return True
-        index += 1
-    return False
+    """Detect statement separators outside literals and comments, or fail closed."""
+    try:
+        return any(token.kind == "symbol" and token.text == ";" for token in _sql_tokens(sql))
+    except ValueError:
+        return True
 
 
 def _extract_identifier(identifier: str, session_prefix: str) -> tuple[str, bool]:
