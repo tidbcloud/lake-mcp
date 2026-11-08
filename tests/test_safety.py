@@ -723,6 +723,8 @@ class TestStatementBoundaries:
             "SHOW DATABASES; DROP TABLE production.users",
             "DESC mydb.t; DROP DATABASE production",
             "SELECT 1; SELECT 2",
+            "SELECT 1 AS a$$; DROP TABLE production.users; SELECT 2 AS b$$",
+            "SELECT 1 AS a$tag$; DROP TABLE production.users; SELECT 2 AS b$tag$",
         ],
     )
     def test_stacked_statements_blocked(self, sql):
@@ -741,6 +743,8 @@ class TestStatementBoundaries:
         [
             "SELECT * FROM production.users;",
             "  SELECT 1 ;  ",
+            "SELECT 1 AS a$$",
+            "SELECT $$a;b$$",
             f"CREATE OR REPLACE PROCEDURE {get_session_prefix()}proc AS $$ SELECT 1; SELECT 2 $$",
         ],
     )

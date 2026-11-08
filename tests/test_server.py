@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import pytest
+
 from lake_mcp import server
 from lake_mcp.safety import get_session_prefix
 
@@ -57,10 +59,11 @@ def test_show_tables_rejects_injected_database(monkeypatch):
     assert executed == []
 
 
-def test_show_tables_rejects_injected_filter(monkeypatch):
+@pytest.mark.parametrize("filter_sql", ["1=1; DROP DATABASE production", "name$$; DROP DATABASE production; name$$"])
+def test_show_tables_rejects_injected_filter(monkeypatch, filter_sql):
     executed = _record_sql(monkeypatch)
 
-    result = server.show_tables(filter="1=1; DROP DATABASE production")
+    result = server.show_tables(filter=filter_sql)
 
     assert result["status"] == "error"
     assert executed == []
