@@ -79,12 +79,12 @@ def test_auth_requires_credentials(monkeypatch):
 
 
 def test_token_is_verified(monkeypatch):
-    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token")
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token-for-network-testing")
     auth = build_auth()
     import asyncio
 
     assert asyncio.run(auth.verify_token("wrong")) is None
-    assert asyncio.run(auth.verify_token("local-test-token")).client_id == "lake-mcp"
+    assert asyncio.run(auth.verify_token("local-test-token-for-network-testing")).client_id == "lake-mcp"
 
 
 def test_http_authentication_reaches_transport(monkeypatch):
@@ -93,7 +93,7 @@ def test_http_authentication_reaches_transport(monkeypatch):
     import httpx
     from fastmcp import FastMCP
 
-    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token")
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token-for-network-testing")
     mcp = FastMCP("auth-regression", auth=build_auth())
 
     @mcp.tool
@@ -104,7 +104,7 @@ def test_http_authentication_reaches_transport(monkeypatch):
         app = mcp.http_app(stateless_http=True)
         async with app.router.lifespan_context(app):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-                for token, expected in [(None, 401), ("wrong", 401), ("local-test-token", 200)]:
+                for token, expected in [(None, 401), ("wrong", 401), ("local-test-token-for-network-testing", 200)]:
                     headers = {"Accept": "application/json, text/event-stream"}
                     if token:
                         headers["Authorization"] = "Bearer " + token

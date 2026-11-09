@@ -3,15 +3,17 @@ import concurrent.futures
 import logging
 import re
 import sys
+import threading
 from typing import Optional
 
 import pyarrow as pa
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
 from .runtime_security import build_auth, load_config_file, network_run_options
-from .safety import SESSION_ID, check_sql_safety, get_session_prefix, has_top_level_separator
+from .safety import SESSION_ID, check_network_sql, check_sql_safety, get_session_prefix, has_top_level_separator
 
 # Constants
 SERVER_NAME = "lake-mcp"
@@ -36,6 +38,7 @@ mcp = FastMCP(SERVER_NAME, auth=build_auth())
 
 # Global Lake client singleton
 _lake_client = None
+_lake_client_lock = threading.Lock()
 
 # Tool arguments are interpolated into SQL text, so they are normalized here
 # instead of being pasted in raw: the safety gate sees the finished statement,
@@ -117,13 +120,13 @@ def _render_identifier(value: str, *, allow_qualified: bool = True, unquoted_onl
     rendered: list[str] = []
     for content, was_quoted in parts:
         if not was_quoted:
-            if not _IDENTIFIER_UNQUOTED_RE.match(content):
+            if not _IDENTIFIER_UNQUOTED_RE.fullmatch(content):
                 return None
             rendered.append(content)
             continue
         if unquoted_only:
             # e.g. CREATE STAGE only accepts a plain (unquoted) identifier.
-            if not _IDENTIFIER_UNQUOTED_RE.match(content):
+            if not _IDENTIFIER_UNQUOTED_RE.fullmatch(content):
                 return None
             rendered.append(content)
             continue
@@ -159,8 +162,9 @@ def _escape_sql_literal(value: str) -> str:
 def get_global_lake_client():
     """Get global Lake client instance."""
     global _lake_client
-    if _lake_client is None:
-        _lake_client = create_lake_client()
+    with _lake_client_lock:
+        if _lake_client is None:
+            _lake_client = create_lake_client()
     return _lake_client
 
 
@@ -214,10 +218,9 @@ def execute_lake_query(sql: str) -> list[dict] | dict:
             logger.info(f"Query executed successfully, returned {len(results)} rows")
             return results
 
-    except Exception as err:
-        error_msg = f"Error executing query: {str(err)}"
-        logger.error(error_msg)
-        return {"error": error_msg}
+    except Exception:
+        logger.error("Warehouse query failed")
+        return {"error": "Warehouse query failed"}
 
 
 def recordbatches_to_dicts(batches: list[pa.RecordBatch]) -> list[dict]:
@@ -231,15 +234,19 @@ def recordbatches_to_dicts(batches: list[pa.RecordBatch]) -> list[dict]:
 
 
 def _execute_sql(sql: str) -> dict:
-    logger.info(f"Executing SQL query: {sql}")
+    logger.info("Executing SQL query")
 
     config = get_config()
 
-    if config.safe_mode:
-        # Code-enforced safety check - cannot be bypassed while safe mode is enabled
-        result = check_sql_safety(sql)
+    network = getattr(config, "mcp_server_transport", "stdio") != "stdio"
+    if network or config.safe_mode:
+        if network:
+            token = get_access_token()
+            result = check_network_sql(sql, allow_write=bool(token and "lake:write" in token.scopes))
+        else:
+            result = check_sql_safety(sql)
         if not result.allowed:
-            logger.warning(f"Query blocked: {result.reason} - SQL: {sql}")
+            logger.warning("Query rejected by sandbox policy")
             return {"status": "error", "message": result.reason}
     else:
         logger.warning("LAKE_MCP_SAFE_MODE=false: sandbox safety check is disabled")
@@ -254,7 +261,7 @@ def _execute_sql(sql: str) -> dict:
 
             if isinstance(result, dict) and "error" in result:
                 error_msg = f"Query execution failed: {result['error']}"
-                logger.warning(error_msg)
+                logger.warning("Query execution failed")
                 return {"status": "error", "message": error_msg}
 
             # Ensure we always return a dict structure for fastmcp compatibility
@@ -265,14 +272,13 @@ def _execute_sql(sql: str) -> dict:
 
         except concurrent.futures.TimeoutError:
             error_msg = f"Query timed out after {query_timeout} seconds"
-            logger.warning(f"{error_msg}: {sql}")
+            logger.warning(error_msg)
             future.cancel()
             return {"status": "error", "message": error_msg}
 
-    except Exception as e:
-        error_msg = f"Unexpected error in query execution: {str(e)}"
-        logger.error(error_msg)
-        return {"status": "error", "message": error_msg}
+    except Exception:
+        logger.error("Unexpected error in query execution")
+        return {"status": "error", "message": "Unexpected error in query execution"}
 
 
 def execute_multi_sql(sqls: list[str]) -> list[dict]:
@@ -438,7 +444,7 @@ def create_stage(name: str, url: str, connection_name: Optional[str] = None) -> 
     Returns:
         Dictionary containing either query results or error information
     """
-    logger.info(f"Creating stage '{name}' with URL '{url}'")
+    logger.info("Creating stage")
 
     rendered_name = _render_identifier(name, allow_qualified=False, unquoted_only=True)
     if rendered_name is None:
@@ -531,6 +537,8 @@ def main():
     try:
         config = get_config()
         transport = config.mcp_server_transport
+        if not config.local_mode:
+            _ = config.dsn
 
         logger.info(f"Starting Lake MCP server with transport: {transport}")
 
@@ -550,7 +558,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Shutting down server by user request")
     except Exception as e:
-        logger.error(f"Server startup failed: {str(e)}")
+        logger.error("Server startup failed (%s)", type(e).__name__)
         sys.exit(1)
 
 

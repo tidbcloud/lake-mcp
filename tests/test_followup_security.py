@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lake_mcp.runtime_security import build_auth, network_run_options
-from lake_mcp.safety import SESSION_ID, check_sql_safety, get_session_prefix
+from lake_mcp.runtime_security import build_auth, network_run_options, secure_dsn
+from lake_mcp.safety import SESSION_ID, check_network_sql, check_sql_safety, get_session_prefix
 
 
 @pytest.mark.parametrize("kind,options", [("TASK", "WAREHOUSE='wh' SCHEDULE=1 MINUTE"), ("PIPE", ""), ("DYNAMIC TABLE", "")])
@@ -23,10 +23,13 @@ def test_network_requires_actual_mounted_auth(monkeypatch):
     monkeypatch.delenv("LAKE_MCP_ALLOW_INSECURE_HTTP", raising=False)
     with pytest.raises(ValueError, match="requires"):
         network_run_options(config, None)
-    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "test-network-token")
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "test-network-token-at-least-32-bytes")
     auth = build_auth()
+    with pytest.raises(ValueError, match="requires TLS"):
+        network_run_options(config, auth)
+    monkeypatch.setenv("LAKE_MCP_TRUST_TLS_PROXY", "1")
     assert network_run_options(config, auth)["host"] == "0.0.0.0"
-    monkeypatch.setenv("LAKE_MCP_ALLOWED_HOSTS", "*")
+    monkeypatch.setenv("LAKE_MCP_ALLOWED_HOSTS", "*.example.com")
     with pytest.raises(ValueError, match="explicit hosts"):
         network_run_options(config, auth)
 
@@ -71,3 +74,47 @@ def test_grant_revoke_blocks_unchecked_names(statement):
 )
 def test_grant_revoke_allows_sandbox_names(statement):
     assert check_sql_safety(statement.format(p=get_session_prefix())).allowed
+
+
+def test_network_sql_limits_read_only_and_account_administration():
+    prefix = get_session_prefix()
+    assert check_network_sql("SELECT 1", allow_write=False).allowed
+    assert not check_network_sql(f"INSERT INTO {prefix}t VALUES (1)", allow_write=False).allowed
+    assert check_network_sql(f"INSERT INTO {prefix}t VALUES (1)", allow_write=True).allowed
+    assert not check_network_sql(f"GRANT ROLE {prefix}r TO {prefix}u", allow_write=True).allowed
+    assert not check_network_sql(
+        f"CREATE TASK {prefix}t AS GRANT ROLE {prefix}r TO {prefix}u", allow_write=True
+    ).allowed
+
+
+def test_safe_mode_does_not_allow_external_code_or_procedure_writes():
+    p = get_session_prefix()
+    assert check_sql_safety(f"CREATE FUNCTION {p}f AS (x) -> x + 1").allowed
+    for statement in (
+        f"CREATE FUNCTION {p}f(INT) RETURNS INT LANGUAGE python HANDLER='h' ADDRESS='http://example.invalid/'",
+        f"CREATE OR REPLACE FUNCTION {p}f(INT) RETURNS INT LANGUAGE python HANDLER='h' AS $$ code $$",
+        f"ALTER FUNCTION {p}f(INT) RETURNS INT LANGUAGE python HANDLER='h' AS $$ code $$",
+        f"CREATE PROCEDURE {p}p() RETURNS INT LANGUAGE SQL AS $$ BEGIN DROP DATABASE production; END $$",
+    ):
+        assert not check_sql_safety(statement).allowed
+
+
+def test_warehouse_dsn_requires_tls_for_remote_hosts():
+    assert "sslmode=require" in secure_dsn("lake://warehouse.example/db")
+    assert "sslmode=disable" in secure_dsn("http://127.0.0.1:8000/db?sslmode=disable")
+    with pytest.raises(ValueError, match="Plaintext"):
+        secure_dsn("lake://warehouse.example/db?SSLMODE=disable")
+
+
+def test_sql_and_driver_errors_do_not_reach_logs(monkeypatch, caplog):
+    from lake_mcp import server
+
+    monkeypatch.setattr(server, "get_config", lambda: SimpleNamespace(safe_mode=True, query_timeout=1))
+
+    def fail(_sql):
+        raise RuntimeError("driver-private-error")
+
+    monkeypatch.setattr(server, "execute_lake_query", fail)
+    assert server._execute_sql("SELECT 'sql-private-value'")["status"] == "error"
+    assert "sql-private-value" not in caplog.text
+    assert "driver-private-error" not in caplog.text

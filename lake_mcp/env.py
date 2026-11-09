@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 
+from .runtime_security import secure_dsn
+
 
 class TransportType(Enum):
     """Transport types for MCP server."""
@@ -23,7 +25,7 @@ class LakeMCPConfig:
     """Configuration for TiDB Cloud Lake connection settings.
 
     Required environment variables:
-        LAKE_DSN: The DSN connection string (defaults to: "lake://default:@127.0.0.1:8000/?sslmode=disable")
+        LAKE_DSN: The explicit DSN connection string for remote mode
         LOCAL_MODE: Enable local mode to use the in-memory engine (defaults to: "false")
         LAKE_QUERY_TIMEOUT: Query execution timeout in seconds (defaults to: "300")
         LAKE_MCP_SAFE_MODE: Enable sandbox safety validation (defaults to: "true")
@@ -36,7 +38,10 @@ class LakeMCPConfig:
     @property
     def dsn(self) -> str:
         """Get the TiDB Cloud Lake DSN connection string."""
-        return os.environ.get("LAKE_DSN", "lake://default:@127.0.0.1:8000/?sslmode=disable")
+        dsn = os.environ.get("LAKE_DSN")
+        if not dsn:
+            raise ValueError("LAKE_DSN is required unless LOCAL_MODE is enabled")
+        return secure_dsn(dsn)
 
     @property
     def local_mode(self) -> bool:

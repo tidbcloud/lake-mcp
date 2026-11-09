@@ -3,8 +3,8 @@
 import sys
 
 from .env import TransportType, get_config
-from .server import logger, mcp
 from .runtime_security import network_run_options
+from .server import logger, mcp
 
 
 def main():
@@ -12,6 +12,8 @@ def main():
     try:
         config = get_config()
         transport = config.mcp_server_transport
+        if not config.local_mode:
+            _ = config.dsn
 
         logger.info(f"Starting Lake MCP server with transport: {transport}")
 
@@ -31,7 +33,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Shutting down server by user request")
     except Exception as e:
-        logger.error(f"Server startup failed: {str(e)}")
+        logger.error("Server startup failed (%s)", type(e).__name__)
         sys.exit(1)
 
 

@@ -173,13 +173,27 @@ or production storage permissions.
 
 ### Network listener security
 
-HTTP/SSE requires a configured bearer token. Stdio remains local and needs no
-network token. For an intentionally anonymous local development listener, set
-`LAKE_MCP_ALLOW_INSECURE_HTTP=true` explicitly and bind to a loopback address
-such as `127.0.0.1` or `::1`. The `localhost` alias binds to `127.0.0.1`.
-`LAKE_MCP_ALLOWED_HOSTS` defaults
-to localhost/loopback; provide a comma-separated list of exact service hostnames
-when exposing the listener through a proxy (wildcards are rejected).
+For warehouse connections, provide an explicit `LAKE_DSN` or use
+`LOCAL_MODE=true` for the embedded engine. TLS is required for remote DSNs.
+Local development may use `sslmode=disable` explicitly on a loopback endpoint.
+
+HTTP/SSE requires a configured bearer token or JWT verification. Use a randomly
+generated static token of at least 32 bytes, or set `LAKE_MCP_AUTH_JWKS_URI`
+(HTTPS), `LAKE_MCP_AUTH_ISSUER`, and `LAKE_MCP_AUTH_AUDIENCE` for expiring JWTs.
+JWTs require the `lake` scope for reads and `lake:write` for sandbox writes.
+HTTP/SSE always enforces the sandbox and excludes account/role administration.
+Stdio remains local and needs no network token. For an intentionally anonymous,
+read-only development listener, set `LAKE_MCP_ALLOW_INSECURE_HTTP=true` and
+bind to loopback.
+
+Non-loopback listeners require `LAKE_MCP_TLS_CERTFILE` and
+`LAKE_MCP_TLS_KEYFILE`. When a trusted proxy terminates TLS, use a loopback
+listener where possible. Set `LAKE_MCP_TRUST_TLS_PROXY=1` only when the cleartext
+listener is isolated behind that proxy. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
+hostnames only.
+
+Safe mode accepts SQL lambda functions and procedures containing a single
+validated read query. Use trusted local stdio for other routine definitions.
 
 A process and its configured bearer token form one owner/trust domain. The
 128-bit sandbox prefix prevents accidental name collisions, and is deliberately

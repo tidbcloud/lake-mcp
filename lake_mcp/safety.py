@@ -869,6 +869,57 @@ def check_sql_safety(sql: str) -> SafetyResult:
         return SafetyResult(False, "SQL could not be tokenized safely")
 
 
+def check_network_sql(sql: str, *, allow_write: bool) -> SafetyResult:
+    """Apply network policy to the entire statement, including deferred bodies."""
+    previous = getattr(_NESTED_STATE, "network_write", None)
+    _NESTED_STATE.network_write = allow_write
+    try:
+        return check_sql_safety(sql)
+    finally:
+        _NESTED_STATE.network_write = previous
+
+
+def _check_routine_definition(statement: str, session_prefix: str) -> SafetyResult | None:
+    header = _sql_search(r"^(?:CREATE(?:\s+OR\s+REPLACE)?|ALTER)\s+(FUNCTION|PROCEDURE)\b", statement, re.IGNORECASE)
+    if not header:
+        return None
+    if header.group(1).upper() == "FUNCTION":
+        lambda_header = _sql_search(
+            rf"^\s+(?:IF\s+NOT\s+EXISTS\s+)?{IDENTIFIER_PATTERN}\s+AS\s+\(",
+            statement[header.end() :],
+            re.IGNORECASE,
+        )
+        if lambda_header:
+            tokens = _sql_tokens(statement[header.end() + lambda_header.end() - 1 :])
+            end = _group_end(tokens, 0)
+            if end is not None and [t.text for t in tokens[end + 1 : end + 3]] == ["-", ">"]:
+                expression = tokens[end + 3 :]
+                if expression and not any(
+                    (t.kind == "literal" and t.text.startswith("$"))
+                    or (t.kind == "word" and t.text.upper() in {"SELECT", "LANGUAGE", "ADDRESS", "BEGIN", "CALL"})
+                    for t in expression
+                ):
+                    return None
+        return SafetyResult(False, "Safe mode permits only SQL lambda function definitions")
+
+    body = _sql_search(
+        rf"^\s+(?:IF\s+NOT\s+EXISTS\s+)?{IDENTIFIER_PATTERN}\s*(?:\(\s*\))?"
+        r"(?:\s+RETURNS\s+[A-Za-z_][A-Za-z0-9_]*)?(?:\s+LANGUAGE\s+SQL)?\s+AS\s+",
+        statement[header.end() :],
+        re.IGNORECASE,
+    )
+    if body:
+        tokens = _sql_tokens(statement[header.end() + body.end() :])
+        if len(tokens) == 1 and tokens[0].kind == "literal" and (tag := _DOLLAR_QUOTE_RE.match(tokens[0].text)):
+            delimiter = tag.group(0)
+            sql = tokens[0].text[len(delimiter) : -len(delimiter)]
+            nested = _split_sql_statements(sql)
+            if nested and len(nested) == 1 and _first_top_level_verb(nested[0]) == "SELECT":
+                if not _contains_non_sandbox_reference(nested[0], session_prefix) and _check_nested_sql(nested[0]).allowed:
+                    return None
+    return SafetyResult(False, "Safe mode permits only single-query SQL procedure bodies")
+
+
 def _check_single_statement(sql: str) -> SafetyResult:
     sql_std = _standardize_sql(sql)
     tokens = _sql_tokens(sql_std)
@@ -891,6 +942,17 @@ def _check_single_statement(sql: str) -> SafetyResult:
         if _contains_non_sandbox_reference(sql_std, get_session_prefix()) and verb != "SELECT":
             return SafetyResult(False, "CTE write references non-sandbox objects")
     session_prefix = get_session_prefix()
+    network_write = getattr(_NESTED_STATE, "network_write", None)
+    if network_write is not None and (
+        verb in {"GRANT", "REVOKE"}
+        or re.match(r"^(?:CREATE(?:\s+OR\s+REPLACE)?|ALTER|DROP)\s+(?:USER|ROLE)\b", statement, re.IGNORECASE)
+    ):
+        return SafetyResult(False, "Account and role administration is available only in local stdio mode")
+    if network_write is False:
+        return _check_read_only(statement, session_prefix) or SafetyResult(False, "This caller is read-only")
+    routine_denial = _check_routine_definition(statement, session_prefix)
+    if routine_denial is not None:
+        return routine_denial
     # Rules may only claim their real statement type, never a decoy in a value,
     # quoted name, CTE body or deferred statement.
     owners = {
