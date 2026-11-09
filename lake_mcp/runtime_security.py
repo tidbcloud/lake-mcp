@@ -55,16 +55,19 @@ def build_auth():
     jwks = os.environ.get("LAKE_MCP_AUTH_JWKS_URI")
     issuer = os.environ.get("LAKE_MCP_AUTH_ISSUER")
     audience = os.environ.get("LAKE_MCP_AUTH_AUDIENCE")
-    if any((jwks, issuer, audience)):
-        if token is not None or not all((jwks, issuer, audience)):
-            raise ValueError("Configure a static token or a complete JWT issuer, audience and JWKS URI")
+    subject = os.environ.get("LAKE_MCP_AUTH_SUBJECT")
+    if any((jwks, issuer, audience, subject)):
+        if token is not None or not all((jwks, issuer, audience, subject)):
+            raise ValueError("Configure a static token or a complete JWT issuer, audience, subject and JWKS URI")
         if urlsplit(jwks).scheme != "https" or not urlsplit(jwks).hostname:
             raise ValueError("LAKE_MCP_AUTH_JWKS_URI must be an HTTPS URL")
 
         class ExpiringJWTVerifier(JWTVerifier):
             async def verify_token(self, value):
                 verified = await super().verify_token(value)
-                return verified if verified is not None and verified.expires_at is not None else None
+                if verified is None or verified.expires_at is None or (verified.claims or {}).get("sub") != subject:
+                    return None
+                return verified
 
         return ExpiringJWTVerifier(jwks_uri=jwks, issuer=issuer, audience=audience, required_scopes=["lake"])
     required = os.environ.get("LAKE_MCP_REQUIRE_AUTH", "false").lower()

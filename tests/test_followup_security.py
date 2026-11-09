@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -118,3 +119,22 @@ def test_sql_and_driver_errors_do_not_reach_logs(monkeypatch, caplog):
     assert server._execute_sql("SELECT 'sql-private-value'")["status"] == "error"
     assert "sql-private-value" not in caplog.text
     assert "driver-private-error" not in caplog.text
+
+
+def test_jwt_requires_expiry_and_configured_owner(monkeypatch):
+    from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+    monkeypatch.delenv("LAKE_MCP_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("LAKE_MCP_AUTH_JWKS_URI", "https://issuer.example/jwks")
+    monkeypatch.setenv("LAKE_MCP_AUTH_ISSUER", "https://issuer.example")
+    monkeypatch.setenv("LAKE_MCP_AUTH_AUDIENCE", "lake")
+    monkeypatch.setenv("LAKE_MCP_AUTH_SUBJECT", "owner")
+
+    async def verified(_self, token):
+        return SimpleNamespace(expires_at=None if token == "no-expiry" else 1, claims={"sub": token})
+
+    monkeypatch.setattr(JWTVerifier, "verify_token", verified)
+    verifier = build_auth()
+    assert asyncio.run(verifier.verify_token("owner")) is not None
+    assert asyncio.run(verifier.verify_token("other-owner")) is None
+    assert asyncio.run(verifier.verify_token("no-expiry")) is None

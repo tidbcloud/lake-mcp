@@ -152,12 +152,8 @@ The sandbox gate is an additional client-side guard; the warehouse user still
 needs the minimum database grants. A stdio process belongs to its local caller.
 A shared HTTP/SSE process does not provide per-user database or tenant isolation.
 
-For HTTP/SSE, set `LAKE_MCP_AUTH_TOKEN` to enable bearer authentication and
-`LAKE_MCP_REQUIRE_AUTH=true` to fail startup if it is missing. Clients must send
-`Authorization: Bearer <token>`. Keep a plaintext listener on a trusted interface
-or use your existing HTTPS endpoint. A shared bearer token authenticates access
-to this process; it does not create separate warehouse identities. The legacy
-unauthenticated local configuration is preserved unless strict mode is selected.
+Network clients send an `Authorization: Bearer <token>` header. Use the
+listener and credential policies below to configure the transport.
 
 Environment files are now explicit: set `LAKE_MCP_ENV_FILE` to an absolute file
 path when needed. Parent-directory `.env` discovery is disabled so an unrelated
@@ -179,8 +175,10 @@ Local development may use `sslmode=disable` explicitly on a loopback endpoint.
 
 HTTP/SSE requires a configured bearer token or JWT verification. Use a randomly
 generated static token of at least 32 bytes, or set `LAKE_MCP_AUTH_JWKS_URI`
-(HTTPS), `LAKE_MCP_AUTH_ISSUER`, and `LAKE_MCP_AUTH_AUDIENCE` for expiring JWTs.
-JWTs require the `lake` scope for reads and `lake:write` for sandbox writes.
+(HTTPS), `LAKE_MCP_AUTH_ISSUER`, `LAKE_MCP_AUTH_AUDIENCE`, and
+`LAKE_MCP_AUTH_SUBJECT` for expiring JWTs. The subject identifies the one owner
+authorized to use the process's warehouse credentials. JWTs require the `lake`
+scope for reads and `lake:write` for sandbox writes.
 HTTP/SSE always enforces the sandbox and excludes account/role administration.
 Stdio remains local and needs no network token. For an intentionally anonymous,
 read-only development listener, set `LAKE_MCP_ALLOW_INSECURE_HTTP=true` and
