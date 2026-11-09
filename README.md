@@ -152,12 +152,8 @@ The sandbox gate is an additional client-side guard; the warehouse user still
 needs the minimum database grants. A stdio process belongs to its local caller.
 A shared HTTP/SSE process does not provide per-user database or tenant isolation.
 
-For HTTP/SSE, set `LAKE_MCP_AUTH_TOKEN` to enable bearer authentication and
-`LAKE_MCP_REQUIRE_AUTH=true` to fail startup if it is missing. Clients must send
-`Authorization: Bearer <token>`. Keep a plaintext listener on a trusted interface
-or use your existing HTTPS endpoint. A shared bearer token authenticates access
-to this process; it does not create separate warehouse identities. The legacy
-unauthenticated local configuration is preserved unless strict mode is selected.
+Network clients send an `Authorization: Bearer <token>` header. Use the
+listener and credential policies below to configure the transport.
 
 Environment files are now explicit: set `LAKE_MCP_ENV_FILE` to an absolute file
 path when needed. Parent-directory `.env` discovery is disabled so an unrelated
@@ -173,13 +169,29 @@ or production storage permissions.
 
 ### Network listener security
 
-HTTP/SSE requires a configured bearer token. Stdio remains local and needs no
-network token. For an intentionally anonymous local development listener, set
-`LAKE_MCP_ALLOW_INSECURE_HTTP=true` explicitly and bind to a loopback address
-such as `127.0.0.1` or `::1`. The `localhost` alias binds to `127.0.0.1`.
-`LAKE_MCP_ALLOWED_HOSTS` defaults
-to localhost/loopback; provide a comma-separated list of exact service hostnames
-when exposing the listener through a proxy (wildcards are rejected).
+For warehouse connections, provide an explicit `LAKE_DSN` or use
+`LOCAL_MODE=true` for the embedded engine. TLS is required for remote DSNs.
+Local development may use `sslmode=disable` explicitly on a loopback endpoint.
+
+HTTP/SSE requires a configured bearer token or JWT verification. Use a randomly
+generated static token of at least 32 bytes, or set `LAKE_MCP_AUTH_JWKS_URI`
+(HTTPS), `LAKE_MCP_AUTH_ISSUER`, `LAKE_MCP_AUTH_AUDIENCE`, and
+`LAKE_MCP_AUTH_SUBJECT` for expiring JWTs. The subject identifies the one owner
+authorized to use the process's warehouse credentials. JWTs require the `lake`
+scope for reads and `lake:write` for sandbox writes.
+HTTP/SSE always enforces the sandbox and excludes account/role administration.
+Stdio remains local and needs no network token. For an intentionally anonymous,
+read-only development listener, set `LAKE_MCP_ALLOW_INSECURE_HTTP=true` and
+bind to loopback.
+
+Non-loopback listeners require `LAKE_MCP_TLS_CERTFILE` and
+`LAKE_MCP_TLS_KEYFILE`. When a trusted proxy terminates TLS, use a loopback
+listener where possible. Set `LAKE_MCP_TRUST_TLS_PROXY=1` only when the cleartext
+listener is isolated behind that proxy. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
+hostnames only.
+
+Safe mode accepts SQL lambda functions and procedures containing a single
+validated read query. Use trusted local stdio for other routine definitions.
 
 A process and its configured bearer token form one owner/trust domain. The
 128-bit sandbox prefix prevents accidental name collisions, and is deliberately

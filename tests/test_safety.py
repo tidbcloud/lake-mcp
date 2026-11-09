@@ -745,7 +745,7 @@ class TestStatementBoundaries:
             "  SELECT 1 ;  ",
             "SELECT 1 AS a$$",
             "SELECT $$a;b$$",
-            f"CREATE OR REPLACE PROCEDURE {get_session_prefix()}proc AS $$ SELECT 1; SELECT 2 $$",
+            f"CREATE OR REPLACE PROCEDURE {get_session_prefix()}proc AS $$ SELECT 1; $$",
         ],
     )
     def test_single_statement_with_trailing_separator_allowed(self, sql):
