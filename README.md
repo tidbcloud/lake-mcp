@@ -190,6 +190,12 @@ listener where possible. Set `LAKE_MCP_TRUST_TLS_PROXY=1` only when the cleartex
 listener is isolated behind that proxy. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
 hostnames only.
 
+HTTP and SSE sessions get distinct write sandbox prefixes. Read access still
+follows the grants of the configured warehouse connection. Share an instance
+only with clients that should have access to that same warehouse identity.
+For separate tenant or user permissions, run separate instances with
+separately scoped warehouse credentials. Use stateful HTTP for sandbox writes.
+
 Safe mode accepts SQL lambda functions and procedures containing a single
 validated read query. Use trusted local stdio for other routine definitions.
 

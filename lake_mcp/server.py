@@ -12,8 +12,8 @@ from fastmcp.server.dependencies import get_access_token
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
-from .runtime_security import build_auth, load_config_file, network_run_options
-from .safety import SESSION_ID, check_network_sql, check_sql_safety, get_session_prefix, has_top_level_separator
+from .runtime_security import build_auth, get_network_request, load_config_file, network_run_options
+from .safety import check_network_sql, check_sql_safety, get_session_id, get_session_prefix, has_top_level_separator
 
 # Constants
 SERVER_NAME = "lake-mcp"
@@ -33,8 +33,15 @@ atexit.register(lambda: QUERY_EXECUTOR.shutdown(wait=True))
 # Load environment variables
 load_config_file()
 
-# Initialize MCP server
-mcp = FastMCP(SERVER_NAME, auth=build_auth())
+
+class LakeMCP(FastMCP):
+    def http_app(self, path=None, middleware=None, **kwargs):
+        # Embedded ASGI apps also pass through the same HTTP/SSE policy.
+        options = network_run_options(get_config(), self.auth)
+        return super().http_app(path=path, middleware=[*options["middleware"], *(middleware or [])], **kwargs)
+
+
+mcp = LakeMCP(SERVER_NAME, auth=build_auth())
 
 # Global Lake client singleton
 _lake_client = None
@@ -238,10 +245,12 @@ def _execute_sql(sql: str) -> dict:
 
     config = get_config()
 
-    network = getattr(config, "mcp_server_transport", "stdio") != "stdio"
+    network = get_network_request() is not None
     if network or config.safe_mode:
         if network:
             token = get_access_token()
+            if mcp.auth is not None and token is None:
+                return {"status": "error", "message": "HTTP/SSE authentication required"}
             result = check_network_sql(sql, allow_write=bool(token and "lake:write" in token.scopes))
         else:
             result = check_sql_safety(sql)
@@ -473,11 +482,12 @@ def get_session_sandbox_prefix() -> dict:
     Returns:
         Dictionary with session_id and prefix
     """
+    prefix = get_session_prefix()
     return {
-        "session_id": SESSION_ID,
-        "prefix": get_session_prefix(),
-        "example_database": f"{get_session_prefix()}mydb",
-        "example_table": f"{get_session_prefix()}mydb.mytable",
+        "session_id": get_session_id(),
+        "prefix": prefix,
+        "example_database": f"{prefix}mydb",
+        "example_table": f"{prefix}mydb.mytable",
     }
 
 
@@ -547,10 +557,12 @@ def main():
         if transport in http_transports:
             # Use the configured bind host (defaults to 127.0.0.1, can be set to 0.0.0.0)
             # and bind port (defaults to 8001)
+            options = network_run_options(config, mcp.auth)
+            options.pop("middleware")  # Installed by LakeMCP.http_app.
             mcp.run(
                 transport=transport,
                 port=config.mcp_bind_port,
-                **network_run_options(config, mcp.auth),
+                **options,
             )
         else:
             # For stdio transport, no host or port is needed

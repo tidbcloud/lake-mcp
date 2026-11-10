@@ -1,41 +1,6 @@
 """Main entry point for the Lake MCP server."""
 
-import sys
-
-from .env import TransportType, get_config
-from .runtime_security import network_run_options
-from .server import logger, mcp
-
-
-def main():
-    """Main entry point for the MCP server."""
-    try:
-        config = get_config()
-        transport = config.mcp_server_transport
-        if not config.local_mode:
-            _ = config.dsn
-
-        logger.info(f"Starting Lake MCP server with transport: {transport}")
-
-        # For HTTP and SSE transports, we need to specify host and port
-        http_transports = [TransportType.HTTP.value, TransportType.SSE.value]
-        if transport in http_transports:
-            # Use the configured bind host (defaults to 127.0.0.1, can be set to 0.0.0.0)
-            # and bind port (defaults to 8001)
-            mcp.run(
-                transport=transport,
-                port=config.mcp_bind_port,
-                **network_run_options(config, mcp.auth),
-            )
-        else:
-            # For stdio transport, no host or port is needed
-            mcp.run(transport=transport)
-    except KeyboardInterrupt:
-        logger.info("Shutting down server by user request")
-    except Exception as e:
-        logger.error("Server startup failed (%s)", type(e).__name__)
-        sys.exit(1)
-
+from .server import main as main
 
 if __name__ == "__main__":
     main()
