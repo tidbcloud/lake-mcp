@@ -116,3 +116,77 @@ def test_http_authentication_reaches_transport(monkeypatch):
                         assert "ping" in response.text
 
     asyncio.run(exercise())
+
+
+def test_tagged_dollar_quote_does_not_hide_statement_separator():
+    from lake_mcp.safety import has_top_level_separator
+
+    sql = "SHOW TABLES WHERE name = $tag$; DROP TABLE production.users; $tag$"
+    assert has_top_level_separator(sql)
+    assert not check_sql_safety(sql).allowed
+    assert not has_top_level_separator("name = 'a;b'")
+
+
+def test_asgi_mount_rejects_missing_auth_even_when_stdio_is_configured(monkeypatch):
+    from lake_mcp.server import LakeMCP
+
+    monkeypatch.setenv("LAKE_MCP_SERVER_TRANSPORT", "stdio")
+    monkeypatch.delenv("LAKE_MCP_ALLOW_INSECURE_HTTP", raising=False)
+    with pytest.raises(ValueError, match="HTTP/SSE requires configured authentication"):
+        LakeMCP("embedded").http_app()
+
+
+@pytest.mark.asyncio
+async def test_asgi_mount_enforces_network_sql_and_separates_sessions(monkeypatch):
+    import httpx
+
+    from lake_mcp import server
+
+    token = "local-test-token-for-network-testing"
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", token)
+    monkeypatch.setenv("LAKE_MCP_SERVER_TRANSPORT", "stdio")
+    monkeypatch.setenv("LAKE_MCP_SAFE_MODE", "false")
+    monkeypatch.setattr(server.mcp, "auth", build_auth())
+    monkeypatch.setattr(server, "execute_lake_query", lambda _: [])
+    app = server.mcp.http_app(json_response=True)
+    transport = httpx.ASGITransport(app=app)
+    headers = {"Accept": "application/json, text/event-stream", "Authorization": f"Bearer {token}"}
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost", headers=headers) as client:
+
+            async def session():
+                response = await client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+                    },
+                )
+                response.raise_for_status()
+                session_headers = {"Mcp-Session-Id": response.headers["Mcp-Session-Id"]}
+                response = await client.post(
+                    "/mcp", headers=session_headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+                )
+                response.raise_for_status()
+                return session_headers
+
+            async def call(session_headers, name, arguments=None):
+                response = await client.post(
+                    "/mcp",
+                    headers=session_headers,
+                    json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}},
+                )
+                response.raise_for_status()
+                return response.json()["result"]["structuredContent"]
+
+            first, second = await session(), await session()
+            prefix = (await call(first, "get_session_sandbox_prefix"))["prefix"]
+            assert (await call(first, "get_session_sandbox_prefix"))["prefix"] == prefix
+            assert (await call(second, "get_session_sandbox_prefix"))["prefix"] != prefix
+            sql = {"sql": f"CREATE DATABASE {prefix}test"}
+            assert (await call(first, "execute_sql", sql))["status"] == "success"
+            assert (await call(second, "execute_sql", sql))["status"] == "error"
+            assert (await call(first, "execute_sql", {"sql": "DROP DATABASE production"}))["status"] == "error"

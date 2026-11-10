@@ -13,14 +13,20 @@ ARCHITECTURE: Modular rule-based system
 - Rules are checked in order, first match wins
 """
 
+import hmac
 import re
 import secrets
 import threading
 from dataclasses import dataclass
 from typing import Callable
 
-# Session ID: generated at server startup, constant for process lifetime
+from fastmcp.server.dependencies import get_access_token, get_context
+
+from .runtime_security import get_network_request
+
+# The local stdio session keeps its process-wide prefix.
 SESSION_ID = secrets.token_hex(16)
+_NETWORK_SESSION_KEY = secrets.token_bytes(32)
 SANDBOX_PREFIX = "mcp_sandbox_"
 
 # Maximum nesting of deferred statements (TASK/PIPE/DYNAMIC TABLE bodies).
@@ -56,9 +62,18 @@ class SafetyResult:
     reason: str = ""
 
 
+def get_session_id() -> str:
+    if get_network_request() is None:
+        return SESSION_ID
+    token = get_access_token()
+    principal = token.client_id if token is not None else ""
+    message = f"{principal}\0{get_context().session_id}".encode()
+    return hmac.digest(_NETWORK_SESSION_KEY, message, "sha256")[:16].hex()
+
+
 def get_session_prefix() -> str:
     """Return current session's sandbox prefix."""
-    return f"{SANDBOX_PREFIX}{SESSION_ID}_"
+    return f"{SANDBOX_PREFIX}{get_session_id()}_"
 
 
 # ============================================================================
@@ -85,7 +100,7 @@ def _standardize_sql(sql: str) -> str:
 
 
 _QUOTE_CHARS = ("'", '"', "`")
-_DOLLAR_QUOTE_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+_DOLLAR_QUOTE = "$$"
 
 
 def _skip_quoted(sql: str, start: int) -> int | None:
@@ -910,9 +925,8 @@ def _check_routine_definition(statement: str, session_prefix: str) -> SafetyResu
     )
     if body:
         tokens = _sql_tokens(statement[header.end() + body.end() :])
-        if len(tokens) == 1 and tokens[0].kind == "literal" and (tag := _DOLLAR_QUOTE_RE.match(tokens[0].text)):
-            delimiter = tag.group(0)
-            sql = tokens[0].text[len(delimiter) : -len(delimiter)]
+        if len(tokens) == 1 and tokens[0].kind == "literal" and tokens[0].text.startswith(_DOLLAR_QUOTE):
+            sql = tokens[0].text[2:-2]
             nested = _split_sql_statements(sql)
             if nested and len(nested) == 1 and _first_top_level_verb(nested[0]) == "SELECT":
                 if not _contains_non_sandbox_reference(nested[0], session_prefix) and _check_nested_sql(nested[0]).allowed:
@@ -1083,11 +1097,11 @@ def _sql_tokens(sql: str) -> list[_SQLToken]:
                 raise ValueError("Unterminated SQL quote")
             kind = "literal" if sql[i] == "'" else "identifier"
             i = end
-        elif sql[i] == "$" and (match := _DOLLAR_QUOTE_RE.match(sql, i)):
-            end = sql.find(match.group(0), match.end())
+        elif sql.startswith(_DOLLAR_QUOTE, i):
+            end = sql.find(_DOLLAR_QUOTE, i + 2)
             if end < 0:
                 raise ValueError("Unterminated SQL dollar quote")
-            i = end + len(match.group(0))
+            i = end + 2
             kind = "literal"
         elif sql[i].isalnum() or sql[i] == "_":
             i += 1

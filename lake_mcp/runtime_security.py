@@ -6,6 +6,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
+from fastmcp.server.dependencies import get_http_request
+from starlette.responses import PlainTextResponse
 
 
 def load_config_file():
@@ -82,6 +84,29 @@ def build_auth():
     return StaticTokenVerifier(tokens={token: {"client_id": "lake-mcp", "scopes": ["lake", "lake:write"]}}, required_scopes=["lake"])
 
 
+def get_network_request():
+    try:
+        return get_http_request()
+    except RuntimeError:
+        return None
+
+
+class NetworkTransportMiddleware:
+    def __init__(self, app, *, anonymous):
+        self.app = app
+        self.anonymous = anonymous
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            peer = scope.get("client")
+            loopback = peer is not None and _is_loopback(peer[0])
+            if not loopback and (self.anonymous or scope["scheme"] != "https"):
+                response = PlainTextResponse("Authenticated HTTPS required", status_code=403)
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def network_run_options(config, auth):
     """Validate the actual mounted authenticator before opening a listener."""
     from starlette.middleware import Middleware
@@ -112,7 +137,13 @@ def network_run_options(config, auth):
     hosts = [h.strip() for h in os.environ.get("LAKE_MCP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()]
     if not hosts or any("*" in h for h in hosts):
         raise ValueError("LAKE_MCP_ALLOWED_HOSTS must list explicit hosts")
-    options = {"host": host, "middleware": [Middleware(TrustedHostMiddleware, allowed_hosts=hosts)]}
+    options = {
+        "host": host,
+        "middleware": [
+            Middleware(TrustedHostMiddleware, allowed_hosts=hosts),
+            Middleware(NetworkTransportMiddleware, anonymous=auth is None),
+        ],
+    }
     if cert:
         options["uvicorn_config"] = {"ssl_certfile": cert, "ssl_keyfile": key}
     return options
