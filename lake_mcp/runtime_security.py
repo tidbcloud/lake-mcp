@@ -1,11 +1,13 @@
 """Explicit local configuration and optional HTTP bearer authentication."""
 
+import json
 import os
 from ipaddress import ip_address
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
+from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
 from fastmcp.server.dependencies import get_http_request
 from starlette.responses import PlainTextResponse
 
@@ -50,28 +52,99 @@ def secure_dsn(dsn):
     return urlunsplit(parts._replace(query=urlencode([*query, ("sslmode", mode)])))
 
 
-def build_auth():
-    from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
+def _unique_subjects(pairs):
+    entries = dict(pairs)
+    if len(entries) != len(pairs):
+        raise ValueError("Duplicate subject in warehouse map")
+    return entries
 
+
+def _load_warehouse_dsns(path):
+    candidate = Path(path)
+    if not candidate.is_absolute() or not candidate.is_file():
+        raise ValueError("LAKE_MCP_WAREHOUSE_MAP_FILE must name an absolute file")
+    try:
+        entries = json.loads(candidate.read_text(encoding="utf-8"), object_pairs_hook=_unique_subjects)
+        if not isinstance(entries, dict) or not entries:
+            raise ValueError
+        dsns = {}
+        accounts = set()
+        for subject, dsn in entries.items():
+            if not subject or not isinstance(dsn, str):
+                raise ValueError
+            dsn = secure_dsn(dsn)
+            parts = urlsplit(dsn)
+            query = parse_qsl(parts.query, keep_blank_values=True)
+            if not parts.username or not parts.password or ("sslmode", "require") not in query:
+                raise ValueError
+            if any(key.lower() in {"access_token", "access_token_file", "private_key_file"} for key, _ in query):
+                raise ValueError
+            tenants = [value for key, value in query if key == "tenant"]
+            if len(tenants) > 1:
+                raise ValueError
+            account = (parts.hostname.rstrip("."), parts.port or 443, tenants[0] if tenants else "", unquote(parts.username))
+            if account in accounts:
+                raise ValueError
+            accounts.add(account)
+            dsns[subject] = dsn
+        return dsns
+    except (OSError, ValueError):
+        raise ValueError("Invalid warehouse map: expected unique subjects and separate TLS Lake accounts") from None
+
+
+class LakeJWTVerifier(JWTVerifier):
+    def __init__(self, *, subject=None, warehouse_dsns=None, **kwargs):
+        super().__init__(**kwargs)
+        self._subject = subject
+        self._warehouse_dsns = warehouse_dsns
+
+    @property
+    def routes_warehouse_accounts(self):
+        return self._warehouse_dsns is not None
+
+    def warehouse_dsn(self, token):
+        if token is None or self._warehouse_dsns is None:
+            return None
+        return self._warehouse_dsns.get(token.subject)
+
+    async def verify_token(self, value):
+        verified = await super().verify_token(value)
+        if verified is None or verified.expires_at is None:
+            return None
+        subject = (verified.claims or {}).get("sub")
+        if not isinstance(subject, str) or not subject:
+            return None
+        if self.routes_warehouse_accounts:
+            if subject not in self._warehouse_dsns:
+                return None
+        elif subject != self._subject:
+            return None
+        # The HTTP/SSE transport binds a session to the verified principal.
+        # Different subjects may have the same OAuth application client_id.
+        verified.subject = subject
+        return verified
+
+
+def build_auth():
     token = os.environ.get("LAKE_MCP_AUTH_TOKEN")
     jwks = os.environ.get("LAKE_MCP_AUTH_JWKS_URI")
     issuer = os.environ.get("LAKE_MCP_AUTH_ISSUER")
     audience = os.environ.get("LAKE_MCP_AUTH_AUDIENCE")
     subject = os.environ.get("LAKE_MCP_AUTH_SUBJECT")
-    if any((jwks, issuer, audience, subject)):
-        if token is not None or not all((jwks, issuer, audience, subject)):
-            raise ValueError("Configure a static token or a complete JWT issuer, audience, subject and JWKS URI")
+    warehouse_map = os.environ.get("LAKE_MCP_WAREHOUSE_MAP_FILE")
+    if any((jwks, issuer, audience, subject, warehouse_map)):
+        if token is not None or not all((jwks, issuer, audience)) or bool(subject) == bool(warehouse_map):
+            raise ValueError("Configure JWT issuer, audience, JWKS URI and exactly one subject or warehouse map")
         if urlsplit(jwks).scheme != "https" or not urlsplit(jwks).hostname:
             raise ValueError("LAKE_MCP_AUTH_JWKS_URI must be an HTTPS URL")
-
-        class ExpiringJWTVerifier(JWTVerifier):
-            async def verify_token(self, value):
-                verified = await super().verify_token(value)
-                if verified is None or verified.expires_at is None or (verified.claims or {}).get("sub") != subject:
-                    return None
-                return verified
-
-        return ExpiringJWTVerifier(jwks_uri=jwks, issuer=issuer, audience=audience, required_scopes=["lake"])
+        return LakeJWTVerifier(
+            jwks_uri=jwks,
+            issuer=issuer,
+            audience=audience,
+            required_scopes=["lake"],
+            subject=subject,
+            warehouse_dsns=_load_warehouse_dsns(warehouse_map) if warehouse_map else None,
+        )
     required = os.environ.get("LAKE_MCP_REQUIRE_AUTH", "false").lower()
     if required not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
         raise ValueError("Invalid LAKE_MCP_REQUIRE_AUTH; use true or false")

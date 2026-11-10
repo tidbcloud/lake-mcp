@@ -66,7 +66,7 @@ def get_session_id() -> str:
     if get_network_request() is None:
         return SESSION_ID
     token = get_access_token()
-    principal = token.client_id if token is not None else ""
+    principal = (token.subject or token.client_id) if token is not None else ""
     message = f"{principal}\0{get_context().session_id}".encode()
     return hmac.digest(_NETWORK_SESSION_KEY, message, "sha256")[:16].hex()
 
