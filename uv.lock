@@ -1395,6 +1395,7 @@ dependencies = [
     { name = "databend" },
     { name = "fastmcp" },
     { name = "lmdb" },
+    { name = "mcp" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -1419,6 +1420,7 @@ requires-dist = [
     { name = "databend", specifier = ">=1.2.810" },
     { name = "fastmcp", specifier = ">=3.2.0" },
     { name = "lmdb", specifier = ">=1.5.1" },
+    { name = "mcp", specifier = ">=1.30.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "python-multipart", specifier = ">=0.0.30" },
@@ -1431,7 +1433,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.28.1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.30.0" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "ruff", specifier = ">=0.1.0" },

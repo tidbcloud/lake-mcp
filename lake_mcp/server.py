@@ -8,11 +8,12 @@ from typing import Optional
 
 import pyarrow as pa
 from fastmcp import FastMCP
+from fastmcp.server.auth import AuthContext
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
-from .runtime_security import build_auth, get_network_request, load_config_file, network_run_options
+from .runtime_security import LakeJWTVerifier, build_auth, get_network_request, load_config_file, network_run_options
 from .safety import check_network_sql, check_sql_safety, get_session_id, get_session_prefix, has_top_level_separator
 
 # Constants
@@ -35,16 +36,23 @@ load_config_file()
 
 
 class LakeMCP(FastMCP):
+    @property
+    def routes_warehouse_accounts(self):
+        return isinstance(self.auth, LakeJWTVerifier) and self.auth.routes_warehouse_accounts
+
     def http_app(self, path=None, middleware=None, **kwargs):
         # Embedded ASGI apps also pass through the same HTTP/SSE policy.
-        options = network_run_options(get_config(), self.auth)
+        config = get_config()
+        if self.routes_warehouse_accounts and config.local_mode:
+            raise ValueError("Warehouse account mapping requires remote Lake connections")
+        options = network_run_options(config, self.auth)
         return super().http_app(path=path, middleware=[*options["middleware"], *(middleware or [])], **kwargs)
 
 
 mcp = LakeMCP(SERVER_NAME, auth=build_auth())
 
-# Global Lake client singleton
-_lake_client = None
+# Cache one client per configured warehouse connection. None is the legacy single-owner client.
+_lake_clients = {}
 _lake_client_lock = threading.Lock()
 
 # Tool arguments are interpolated into SQL text, so they are normalized here
@@ -166,64 +174,43 @@ def _escape_sql_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "''")
 
 
-def get_global_lake_client():
-    """Get global Lake client instance."""
-    global _lake_client
+def get_global_lake_client(warehouse_dsn: str | None = None):
     with _lake_client_lock:
-        if _lake_client is None:
-            _lake_client = create_lake_client()
-    return _lake_client
+        if warehouse_dsn not in _lake_clients:
+            _lake_clients[warehouse_dsn] = create_lake_client(warehouse_dsn)
+        return _lake_clients[warehouse_dsn]
 
 
-def create_lake_client():
-    """Create and return a Lake client instance."""
+def create_lake_client(warehouse_dsn: str | None = None):
     config = get_config()
 
-    if config.local_mode:
+    if warehouse_dsn is None and config.local_mode:
         logger.info("Creating local Lake client")
-        # Use the local in-memory engine
         import databend
 
         return databend.SessionContext()
-    else:
-        logger.info("Creating remote Lake client")
-        from tidbcloudlake_driver import BlockingLakeClient
 
-        return BlockingLakeClient(config.dsn)
+    logger.info("Creating remote Lake client")
+    from tidbcloudlake_driver import BlockingLakeClient
+
+    return BlockingLakeClient(warehouse_dsn if warehouse_dsn is not None else config.dsn)
 
 
-def execute_lake_query(sql: str) -> list[dict] | dict:
-    """
-    Execute a SQL query against TiDB Cloud Lake and return results.
-
-    Args:
-        sql: SQL query string to execute
-
-    Returns:
-        List of dictionaries containing query results or error dictionary
-    """
-    client = get_global_lake_client()
-    config = get_config()
-
+def execute_lake_query(sql: str, *, warehouse_dsn: str | None = None) -> list[dict] | dict:
+    """Execute SQL with the already selected warehouse connection."""
     try:
-        if config.local_mode:
-            # Handle the local in-memory engine
+        client = get_global_lake_client(warehouse_dsn)
+        if warehouse_dsn is None and get_config().local_mode:
             result = client.sql(sql)
-            df = result.to_py_arrow()
-            return recordbatches_to_dicts(df)
-        else:
-            # Handle remote TiDB Cloud Lake service
-            conn = client.get_conn()
-            cursor = conn.query_iter(sql)
-            column_names = [field.name for field in cursor.schema().fields()]
-            results = []
+            return recordbatches_to_dicts(result.to_py_arrow())
 
-            for row in cursor:
-                row_data = dict(zip(column_names, list(row.values())))
-                results.append(row_data)
+        conn = client.get_conn()
+        cursor = conn.query_iter(sql)
+        column_names = [field.name for field in cursor.schema().fields()]
+        results = [dict(zip(column_names, row.values())) for row in cursor]
 
-            logger.info(f"Query executed successfully, returned {len(results)} rows")
-            return results
+        logger.info(f"Query executed successfully, returned {len(results)} rows")
+        return results
 
     except Exception:
         logger.error("Warehouse query failed")
@@ -246,9 +233,16 @@ def _execute_sql(sql: str) -> dict:
     config = get_config()
 
     network = get_network_request() is not None
+    token = get_access_token() if network else None
+    query_options = {}
+    if mcp.routes_warehouse_accounts:
+        warehouse_dsn = mcp.auth.warehouse_dsn(token)
+        if warehouse_dsn is None:
+            return {"status": "error", "message": "No warehouse account for this identity"}
+        query_options["warehouse_dsn"] = warehouse_dsn
+
     if network or config.safe_mode:
         if network:
-            token = get_access_token()
             if mcp.auth is not None and token is None:
                 return {"status": "error", "message": "HTTP/SSE authentication required"}
             result = check_network_sql(sql, allow_write=bool(token and "lake:write" in token.scopes))
@@ -262,7 +256,7 @@ def _execute_sql(sql: str) -> dict:
 
     try:
         # Submit query to thread pool
-        future = QUERY_EXECUTOR.submit(execute_lake_query, sql)
+        future = QUERY_EXECUTOR.submit(execute_lake_query, sql, **query_options)
         query_timeout = config.query_timeout
         try:
             # Wait for query to complete with timeout
@@ -526,6 +520,12 @@ def create_session_sandbox_database(name: str) -> dict:
     return _execute_sql(f"CREATE DATABASE IF NOT EXISTS {db_name}")
 
 
+def _can_use_write_tool(context: AuthContext) -> bool:
+    if get_network_request() is None:
+        return True
+    return context.token is not None and "lake:write" in context.token.scopes
+
+
 # Register all tools
 mcp.add_tool(Tool.from_function(execute_sql))
 mcp.add_tool(Tool.from_function(execute_multi_sql))
@@ -536,10 +536,10 @@ mcp.add_tool(Tool.from_function(describe_table))
 mcp.add_tool(Tool.from_function(show_stages))
 mcp.add_tool(Tool.from_function(list_stage_files))
 mcp.add_tool(Tool.from_function(show_connections))
-mcp.add_tool(Tool.from_function(create_stage))
+mcp.add_tool(Tool.from_function(create_stage, auth=_can_use_write_tool))
 mcp.add_tool(Tool.from_function(get_session_sandbox_prefix))
 mcp.add_tool(Tool.from_function(list_session_sandbox_databases))
-mcp.add_tool(Tool.from_function(create_session_sandbox_database))
+mcp.add_tool(Tool.from_function(create_session_sandbox_database, auth=_can_use_write_tool))
 
 
 def main():
@@ -547,7 +547,10 @@ def main():
     try:
         config = get_config()
         transport = config.mcp_server_transport
-        if not config.local_mode:
+        if mcp.routes_warehouse_accounts:
+            if transport == TransportType.STDIO.value or config.local_mode:
+                raise ValueError("Warehouse account mapping requires HTTP/SSE with remote Lake connections")
+        elif not config.local_mode:
             _ = config.dsn
 
         logger.info(f"Starting Lake MCP server with transport: {transport}")

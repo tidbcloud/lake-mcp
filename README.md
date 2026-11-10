@@ -119,7 +119,8 @@ This release is a minor bump because a few calls that used to be accepted are no
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LAKE_DSN` | - | Connection string |
+| `LAKE_DSN` | - | Connection string for a single-owner instance |
+| `LAKE_MCP_WAREHOUSE_MAP_FILE` | - | Absolute path to a JWT subject-to-connection map for shared HTTP/SSE |
 | `LOCAL_MODE` | `false` | Use the embedded local engine |
 | `LAKE_QUERY_TIMEOUT` | `300` | Query timeout (seconds) |
 | `LAKE_MCP_SAFE_MODE` | `true` | Enable sandbox validation. Set to `false` to allow all SQL permitted by the configured user. |
@@ -190,11 +191,36 @@ listener where possible. Set `LAKE_MCP_TRUST_TLS_PROXY=1` only when the cleartex
 listener is isolated behind that proxy. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
 hostnames only.
 
-HTTP and SSE sessions get distinct write sandbox prefixes. Read access still
-follows the grants of the configured warehouse connection. Share an instance
-only with clients that should have access to that same warehouse identity.
-For separate tenant or user permissions, run separate instances with
-separately scoped warehouse credentials. Use stateful HTTP for sandbox writes.
+HTTP and SSE sessions get distinct write sandbox prefixes. In single-owner mode,
+share the instance only with clients that should have the same warehouse
+permissions. Use stateful HTTP for sandbox writes.
+
+### Shared HTTP/SSE with separate warehouse accounts
+
+To serve users with different warehouse permissions from the same process,
+configure `LAKE_MCP_AUTH_JWKS_URI`, `LAKE_MCP_AUTH_ISSUER`, and
+`LAKE_MCP_AUTH_AUDIENCE` as above. Set `LAKE_MCP_WAREHOUSE_MAP_FILE` to the
+absolute path of a private JSON file. Leave `LAKE_MCP_AUTH_SUBJECT` and
+`LAKE_MCP_AUTH_TOKEN` unset. For example, using placeholder credentials:
+
+```json
+{
+  "alice-subject": "lake://alice:password@warehouse.example:443/alice_db",
+  "bob-subject": "lake://bob:password@warehouse.example:443/bob_db"
+}
+```
+
+Keys are the verified JWT `sub` values. Each entry requires a distinct
+password-authenticated Lake account over TLS. Grant each account only the
+databases, tables, and stages that its user should be able to access. The server
+uses that account for every query by that subject. Unmapped subjects are
+rejected and never use `LAKE_DSN`. The `lake` scope allows reads, and
+`lake:write` additionally permits writes in the caller's sandbox where the
+warehouse account has the necessary grants. Clients without the write scope
+cannot list or call the dedicated write tools.
+
+Restrict access to the map file as you would to any credential file. Restart
+the server after changing the map or rotating warehouse credentials.
 
 Safe mode accepts SQL lambda functions and procedures containing a single
 validated read query. Use trusted local stdio for other routine definitions.
