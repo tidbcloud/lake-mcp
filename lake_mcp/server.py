@@ -1,6 +1,7 @@
 import atexit
 import concurrent.futures
 import logging
+import os
 import re
 import sys
 import threading
@@ -9,12 +10,12 @@ from typing import Optional
 import pyarrow as pa
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthContext
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_context
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
 from .runtime_security import LakeJWTVerifier, build_auth, get_network_request, load_config_file, network_run_options
-from .safety import check_network_sql, check_sql_safety, get_session_id, get_session_prefix, has_top_level_separator
+from .safety import audit_operation, check_network_sql, check_sql_safety, get_session_id, get_session_prefix
 
 # Constants
 SERVER_NAME = "lake-mcp"
@@ -51,8 +52,8 @@ class LakeMCP(FastMCP):
 
 mcp = LakeMCP(SERVER_NAME, auth=build_auth())
 
-# Cache one client per configured warehouse connection. None is the legacy single-owner client.
-_lake_clients = {}
+# Single-owner mode retains one client; mapped connections use current credentials per query.
+_lake_client = None
 _lake_client_lock = threading.Lock()
 
 # Tool arguments are interpolated into SQL text, so they are normalized here
@@ -175,10 +176,14 @@ def _escape_sql_literal(value: str) -> str:
 
 
 def get_global_lake_client(warehouse_dsn: str | None = None):
+    if warehouse_dsn is not None:
+        return create_lake_client(warehouse_dsn)
+
+    global _lake_client
     with _lake_client_lock:
-        if warehouse_dsn not in _lake_clients:
-            _lake_clients[warehouse_dsn] = create_lake_client(warehouse_dsn)
-        return _lake_clients[warehouse_dsn]
+        if _lake_client is None:
+            _lake_client = create_lake_client()
+        return _lake_client
 
 
 def create_lake_client(warehouse_dsn: str | None = None):
@@ -233,6 +238,12 @@ def _execute_sql(sql: str) -> dict:
     config = get_config()
 
     network = get_network_request() is not None
+    try:
+        transport = get_context().transport
+    except RuntimeError:
+        transport = None
+    if not network and transport in {"sse", "streamable-http"}:
+        return {"status": "error", "message": "HTTP/SSE request context required"}
     token = get_access_token() if network else None
     query_options = {}
     if mcp.routes_warehouse_accounts:
@@ -241,18 +252,31 @@ def _execute_sql(sql: str) -> dict:
             return {"status": "error", "message": "No warehouse account for this identity"}
         query_options["warehouse_dsn"] = warehouse_dsn
 
-    if network or config.safe_mode:
+    local_admin = not network and os.environ.get("LAKE_MCP_ALLOW_STDIO_ADMIN") == "1"
+    if network or config.safe_mode or not local_admin:
         if network:
             if mcp.auth is not None and token is None:
                 return {"status": "error", "message": "HTTP/SSE authentication required"}
             result = check_network_sql(sql, allow_write=bool(token and "lake:write" in token.scopes))
-        else:
+        elif local_admin:
             result = check_sql_safety(sql)
+        else:
+            result = check_network_sql(sql, allow_write=True)
         if not result.allowed:
             logger.warning("Query rejected by sandbox policy")
             return {"status": "error", "message": result.reason}
     else:
         logger.warning("LAKE_MCP_SAFE_MODE=false: sandbox safety check is disabled")
+
+    # Record privilege use without emitting SQL, parameters, or credentials.
+    if local_admin or not check_network_sql(sql, allow_write=False).allowed:
+        principal = (token.subject or token.client_id) if token is not None else f"stdio:{getattr(os, 'geteuid', lambda: 'local')()}"
+        logger.info(
+            "Warehouse privileged operation requested principal=%r transport=%s action=%s",
+            principal,
+            "network" if network else "stdio",
+            audit_operation(sql),
+        )
 
     try:
         # Submit query to thread pool
@@ -328,6 +352,24 @@ def show_databases():
     return _execute_sql("SHOW DATABASES")
 
 
+_FILTER_ATOM = r"(?:'(?:[^'\\]|\\.|'')*'|[+-]?[0-9]+(?:\.[0-9]+)?|TRUE|FALSE|NULL)"
+_METADATA_FILTER = re.compile(
+    rf"(?P<column>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\s*"
+    rf"(?P<op><>|!=|<=|>=|=|<|>|\s+(?:NOT\s+)?(?:LIKE|ILIKE)\s+)\s*"
+    rf"(?P<value>{_FILTER_ATOM})",
+    re.IGNORECASE,
+)
+
+
+def _metadata_filter(value):
+    # Restrict SHOW predicates to a single metadata column and scalar comparison.
+    # The left side and operator are lexical atoms, not arbitrary SQL expressions.
+    if len(value) > 4096:
+        return None
+    match = _METADATA_FILTER.fullmatch(value.strip())
+    return match.group(0) if match else None
+
+
 def show_tables(database: Optional[str] = None, filter: Optional[str] = None):
     """
     List available TiDB Cloud Lake tables in a database (safe operation, not affected by MCP safe mode).
@@ -349,9 +391,10 @@ def show_tables(database: Optional[str] = None, filter: Optional[str] = None):
             )
         sql += f" FROM {rendered}"
     if filter is not None:
-        if not filter.strip() or has_top_level_separator(filter):
-            return _invalid_argument("filter", "expected a single SQL expression (no ';' outside a string literal)")
-        sql += f" WHERE {filter}"
+        predicate = _metadata_filter(filter)
+        if predicate is None:
+            return _invalid_argument("filter", "expected a metadata column compared with one scalar value")
+        sql += f" WHERE {predicate}"
     return _execute_sql(sql)
 
 
@@ -365,9 +408,10 @@ def show_functions(filter: Optional[str] = None):
     logger.info("Listing all functions")
     sql = "SHOW FUNCTIONS"
     if filter is not None:
-        if not filter.strip() or has_top_level_separator(filter):
-            return _invalid_argument("filter", "expected a single SQL expression (no ';' outside a string literal)")
-        sql += f" WHERE {filter}"
+        predicate = _metadata_filter(filter)
+        if predicate is None:
+            return _invalid_argument("filter", "expected a metadata column compared with one scalar value")
+        sql += f" WHERE {predicate}"
     return _execute_sql(sql)
 
 

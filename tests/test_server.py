@@ -27,6 +27,7 @@ def test_execute_sql_blocks_non_sandbox_write_in_safe_mode(monkeypatch):
 def test_execute_sql_skips_sandbox_validation_when_safe_mode_disabled(monkeypatch):
     executed_sql = []
 
+    monkeypatch.setenv("LAKE_MCP_ALLOW_STDIO_ADMIN", "1")
     monkeypatch.setattr(server, "get_config", lambda: FakeConfig(safe_mode=False))
     monkeypatch.setattr(
         server,
@@ -86,12 +87,12 @@ def test_show_tables_allows_semicolon_inside_filter_literal(monkeypatch):
     assert executed == ["SHOW TABLES WHERE name = 'a;b'"]
 
 
-def test_show_tables_allows_top_level_filter_comment(monkeypatch):
+def test_show_tables_rejects_top_level_filter_comment(monkeypatch):
     executed = _record_sql(monkeypatch)
 
     server.show_tables(filter="1=1 -- trailing")
 
-    assert executed == ["SHOW TABLES WHERE 1=1 -- trailing"]
+    assert executed == []
 
 
 def test_show_tables_builds_expected_statement(monkeypatch):
@@ -407,4 +408,24 @@ def test_quoted_identifier_cannot_escape_with_backslash_or_backtick(monkeypatch)
         result = server.show_tables(database=database)
         assert result["status"] == "error"
 
+    assert executed == []
+
+
+def test_network_context_cannot_fall_back_to_stdio(monkeypatch):
+    from types import SimpleNamespace
+
+    executed = []
+    monkeypatch.setattr(server, "execute_lake_query", lambda sql: executed.append(sql) or [])
+    monkeypatch.setenv("LAKE_MCP_ALLOW_STDIO_ADMIN", "1")
+    monkeypatch.setattr(server, "get_context", lambda: SimpleNamespace(transport="sse"))
+    assert server._execute_sql("SELECT 1")["status"] == "error"
+    assert executed == []
+
+
+def test_safe_mode_off_requires_local_admin_opt_in(monkeypatch):
+    executed = []
+    monkeypatch.setattr(server, "execute_lake_query", lambda sql: executed.append(sql) or [])
+    monkeypatch.delenv("LAKE_MCP_ALLOW_STDIO_ADMIN", raising=False)
+    monkeypatch.setattr(server, "get_config", lambda: FakeConfig(safe_mode=False))
+    assert server._execute_sql("CREATE DATABASE ordinary_database")["status"] == "error"
     assert executed == []
