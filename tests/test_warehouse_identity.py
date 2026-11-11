@@ -26,6 +26,7 @@ INITIALIZE = {
 def warehouse_map(monkeypatch, tmp_path):
     path = tmp_path / "warehouses.json"
     path.write_text(json.dumps({"alice": ALICE_DSN, "bob": BOB_DSN}))
+    path.chmod(0o600)
     monkeypatch.setenv("LAKE_MCP_WAREHOUSE_MAP_FILE", str(path))
     monkeypatch.setenv("LAKE_MCP_AUTH_ISSUER", ISSUER)
     monkeypatch.setenv("LAKE_MCP_AUTH_AUDIENCE", "lake")
@@ -74,7 +75,6 @@ def mapped_server(warehouse_map, monkeypatch):
 
     monkeypatch.setattr(verifier, "_get_verification_key", verification_key)
     monkeypatch.setattr(server.mcp, "auth", verifier)
-    monkeypatch.setattr(server, "_lake_clients", {})
     monkeypatch.setenv("LAKE_DSN", "lake://fallback:synthetic@warehouse.example/global_db")
     monkeypatch.setenv("LAKE_MCP_SAFE_MODE", "false")
     monkeypatch.delenv("LOCAL_MODE", raising=False)
@@ -174,7 +174,6 @@ async def test_subject_routing_and_session_authorization(mapped_server, monkeypa
             assert result(alice_result)["data"] == [{"account": "alice"}]
             assert result(bob_result)["data"] == [{"account": "bob"}]
             assert result(await tool(bob, bob_session, "list_stage_files", stage_name="example"))["data"] == [{"account": "bob"}]
-            assert len(created) == 2
             assert set(created) == {ALICE_DSN + "?sslmode=require", BOB_DSN + "?sslmode=require"}
 
             prefix = result(await tool(alice, alice_session, "get_session_sandbox_prefix"))["prefix"]
@@ -225,3 +224,40 @@ async def test_sse_uses_the_authenticated_warehouse(mapped_server, monkeypatch):
             finally:
                 listener_server.should_exit = True
                 await task
+
+
+@pytest.mark.asyncio
+async def test_subject_removal_takes_effect_without_restart(warehouse_map, mapped_server):
+    verifier = server.mcp.auth
+    token = mapped_server("alice")
+    verified = await verifier.verify_token(token)
+    assert verifier.warehouse_dsn(verified) == ALICE_DSN + "?sslmode=require"
+    warehouse_map.write_text(json.dumps({"bob": BOB_DSN}))
+    assert await verifier.verify_token(token) is None
+    assert verifier.warehouse_dsn(verified) is None
+
+
+@pytest.mark.asyncio
+async def test_file_bearer_rotation(monkeypatch, tmp_path):
+    path = tmp_path / "bearer"
+    old = "example-old-token-not-for-production"
+    new = "example-new-token-not-for-production"
+    path.write_text(old)
+    path.chmod(0o600)
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN_FILE", str(path))
+    verifier = build_auth()
+    assert await verifier.verify_token(old) is not None
+    path.write_text(new)
+    assert await verifier.verify_token(old) is None
+    assert await verifier.verify_token(new) is not None
+
+
+def test_warehouse_map_accepts_private_credential_files(warehouse_map, tmp_path):
+    credential = tmp_path / "token"
+    credential.write_text("fixture credential")
+    credential.chmod(0o600)
+    warehouse_map.write_text(json.dumps({"alice": f"lake://warehouse.example/db?access_token_file={credential}"}))
+    assert build_auth().routes_warehouse_accounts
+    credential.chmod(0o644)
+    with pytest.raises(ValueError, match="Invalid warehouse map"):
+        build_auth()

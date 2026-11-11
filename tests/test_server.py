@@ -27,6 +27,7 @@ def test_execute_sql_blocks_non_sandbox_write_in_safe_mode(monkeypatch):
 def test_execute_sql_skips_sandbox_validation_when_safe_mode_disabled(monkeypatch):
     executed_sql = []
 
+    monkeypatch.setenv("LAKE_MCP_ALLOW_STDIO_ADMIN", "1")
     monkeypatch.setattr(server, "get_config", lambda: FakeConfig(safe_mode=False))
     monkeypatch.setattr(
         server,
@@ -86,12 +87,12 @@ def test_show_tables_allows_semicolon_inside_filter_literal(monkeypatch):
     assert executed == ["SHOW TABLES WHERE name = 'a;b'"]
 
 
-def test_show_tables_allows_top_level_filter_comment(monkeypatch):
+def test_show_tables_rejects_top_level_filter_comment(monkeypatch):
     executed = _record_sql(monkeypatch)
 
     server.show_tables(filter="1=1 -- trailing")
 
-    assert executed == ["SHOW TABLES WHERE 1=1 -- trailing"]
+    assert executed == []
 
 
 def test_show_tables_builds_expected_statement(monkeypatch):

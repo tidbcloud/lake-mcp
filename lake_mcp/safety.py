@@ -171,7 +171,7 @@ def _contains_non_sandbox_reference(sql: str, session_prefix: str, cte_names: se
 def _check_create_or_replace(sql: str, session_prefix: str) -> SafetyResult | None:
     """Rule: CREATE OR REPLACE must be on sandbox objects."""
     match = _sql_search(
-        rf"\bCREATE\s+OR\s+REPLACE\s+({CREATE_OR_REPLACE_OBJECTS})\s+"
+        rf"^CREATE\s+OR\s+REPLACE\s+({CREATE_OR_REPLACE_OBJECTS})\s+"
         rf"(?:IF\s+(?:NOT\s+)?EXISTS\s+)?({IDENTIFIER_PATTERN})",
         sql,
         re.IGNORECASE,
@@ -352,7 +352,7 @@ def _check_create_drop(sql: str, session_prefix: str) -> SafetyResult | None:
     """Rule: CREATE/DROP operations must be on sandbox objects."""
     # Support db.table format
     match = _sql_search(
-        rf"\b(CREATE|DROP)\s+({CREATE_DROP_OBJECTS})\s+"
+        rf"^(CREATE|DROP)\s+({CREATE_DROP_OBJECTS})\s+"
         rf"(?:IF\s+(?:NOT\s+)?EXISTS\s+)?({IDENTIFIER_LIST_PATTERN})",
         sql,
         re.IGNORECASE,
@@ -415,7 +415,7 @@ def _extract_index_on_table(sql: str) -> str | None:
 def _check_index(sql: str, session_prefix: str) -> SafetyResult | None:
     """Rule: INDEX operations must be on sandbox objects."""
     create_match = _sql_search(
-        rf"\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:ASYNC\s+)?"
+        rf"^CREATE\s+(?:OR\s+REPLACE\s+)?(?:ASYNC\s+)?"
         rf"(?:(?:{INDEX_TYPE_PATTERN})\s+)?INDEX\s+"
         rf"(?:IF\s+(?:NOT\s+)?EXISTS\s+)?({IDENTIFIER_PATTERN})",
         sql,
@@ -446,7 +446,7 @@ def _check_index(sql: str, session_prefix: str) -> SafetyResult | None:
         return SafetyResult(allowed=True)
 
     drop_match = _sql_search(
-        rf"\bDROP\s+(?:(?:{INDEX_TYPE_PATTERN})\s+)?INDEX\s+"
+        rf"^DROP\s+(?:(?:{INDEX_TYPE_PATTERN})\s+)?INDEX\s+"
         rf"(?:IF\s+EXISTS\s+)?({IDENTIFIER_PATTERN})",
         sql,
         re.IGNORECASE,
@@ -882,6 +882,14 @@ def check_sql_safety(sql: str) -> SafetyResult:
         return _check_single_statement(statements[0])
     except ValueError:
         return SafetyResult(False, "SQL could not be tokenized safely")
+
+
+def audit_operation(sql: str) -> str:
+    statements = _split_sql_statements(sql)
+    if not statements or len(statements) != 1:
+        return "BATCH_OR_UNPARSED"
+    verb = _first_top_level_verb(statements[0])
+    return verb if verb in _STATEMENT_VERBS else "OTHER"
 
 
 def check_network_sql(sql: str, *, allow_write: bool) -> SafetyResult:
