@@ -10,7 +10,7 @@ from typing import Optional
 import pyarrow as pa
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthContext
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_context
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
@@ -238,6 +238,12 @@ def _execute_sql(sql: str) -> dict:
     config = get_config()
 
     network = get_network_request() is not None
+    try:
+        transport = get_context().transport
+    except RuntimeError:
+        transport = None
+    if not network and transport in {"sse", "streamable-http"}:
+        return {"status": "error", "message": "HTTP/SSE request context required"}
     token = get_access_token() if network else None
     query_options = {}
     if mcp.routes_warehouse_accounts:

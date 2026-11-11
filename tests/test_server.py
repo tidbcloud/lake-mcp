@@ -409,3 +409,23 @@ def test_quoted_identifier_cannot_escape_with_backslash_or_backtick(monkeypatch)
         assert result["status"] == "error"
 
     assert executed == []
+
+
+def test_network_context_cannot_fall_back_to_stdio(monkeypatch):
+    from types import SimpleNamespace
+
+    executed = []
+    monkeypatch.setattr(server, "execute_lake_query", lambda sql: executed.append(sql) or [])
+    monkeypatch.setenv("LAKE_MCP_ALLOW_STDIO_ADMIN", "1")
+    monkeypatch.setattr(server, "get_context", lambda: SimpleNamespace(transport="sse"))
+    assert server._execute_sql("SELECT 1")["status"] == "error"
+    assert executed == []
+
+
+def test_safe_mode_off_requires_local_admin_opt_in(monkeypatch):
+    executed = []
+    monkeypatch.setattr(server, "execute_lake_query", lambda sql: executed.append(sql) or [])
+    monkeypatch.delenv("LAKE_MCP_ALLOW_STDIO_ADMIN", raising=False)
+    monkeypatch.setattr(server, "get_config", lambda: FakeConfig(safe_mode=False))
+    assert server._execute_sql("CREATE DATABASE ordinary_database")["status"] == "error"
+    assert executed == []
