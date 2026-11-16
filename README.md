@@ -94,7 +94,7 @@ Add the standard config above to your Gemini CLI `settings.json`.
 ### Storage safety changes
 
 - In safe mode, use `create_stage(name)` without a URL or connection to create an internal stage. `CREATE STAGE ... FILE_FORMAT=(...) COMMENT='...'` remains available through `execute_sql`. `create_stage(name, url, connection_name)` retains its arguments for trusted local administration, but safe mode rejects external storage bindings.
-- Safe mode allows managed/default tables and explicit `ENGINE=FUSE`, `MEMORY` or `NULL`; `STORAGE_FORMAT` remains available. It rejects storage location/connection overrides, attached data or snapshot paths, bare storage URIs and external engines, including `CREATE OR REPLACE` and deferred SQL bodies. Stage configuration changes through `ALTER STAGE` are also restricted to the internal-stage options above.
+- Safe mode allows managed/default tables and explicit `ENGINE=FUSE`, `MEMORY` or `NULL`; `STORAGE_FORMAT` remains available. It rejects storage location/connection overrides, database default storage connection/path changes, attached data or snapshot paths, bare storage URIs and external engines, including `CREATE OR REPLACE` and deferred SQL bodies. Stage configuration changes through `ALTER STAGE` are also restricted to the internal-stage options above.
 - `REMOVE` is unavailable in safe mode. A stage's prefix alone cannot prove that deleting its files is safe. Use a separately authorized storage cleanup procedure; do not disable safe mode for an untrusted agent.
 - Trusted local administration retains these operations only with both `LAKE_MCP_SAFE_MODE=false` and `LAKE_MCP_ALLOW_STDIO_ADMIN=1`. HTTP/SSE always enforces the sandbox and cannot use this opt-out.
 

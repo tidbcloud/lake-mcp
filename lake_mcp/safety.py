@@ -830,7 +830,7 @@ def _check_storage_boundary(sql: str) -> SafetyResult | None:
     """
     header = _sql_search(
         rf"^(CREATE(?:\s+OR\s+REPLACE)?|ALTER)\s+"
-        rf"(CONNECTION|CATALOG|STAGE|TABLE|(?:TRANSIENT\s+)?DYNAMIC\s+TABLE)\s+"
+        rf"(CONNECTION|CATALOG|STAGE|DATABASE|TABLE|(?:TRANSIENT\s+)?DYNAMIC\s+TABLE)\s+"
         rf"(?:IF\s+(?:NOT\s+)?EXISTS\s+)?{IDENTIFIER_PATTERN}",
         sql,
         re.IGNORECASE,
@@ -879,6 +879,8 @@ def _check_storage_boundary(sql: str) -> SafetyResult | None:
         "SNAPSHOT_LOC",
         "TEMP_PREFIX",
         "DATABASE_ID",
+        "DEFAULT_STORAGE_CONNECTION",
+        "DEFAULT_STORAGE_PATH",
     }
     depth = 0
     for i, token in enumerate(tokens):
@@ -889,10 +891,11 @@ def _check_storage_boundary(sql: str) -> SafetyResult | None:
         assignment = i + 1 < len(tokens) and tokens[i + 1].text in {"=", ":"}
         storage_option = word.startswith("STORAGE_") and word != "STORAGE_FORMAT"
         if assignment and (word in storage_keys or storage_option or word.endswith("_LOCATION")):
-            return SafetyResult(False, "TABLE blocked: caller-selected storage locations and connections are unavailable in safe mode")
+            return SafetyResult(False, f"{kind} blocked: caller-selected storage locations and connections are unavailable in safe mode")
         if assignment and word == "ENGINE":
-            if i + 2 >= len(tokens) or _identifier_value(tokens[i + 2]).upper() not in {"FUSE", "MEMORY", "NULL"}:
-                return SafetyResult(False, "TABLE blocked: safe mode permits only managed FUSE, MEMORY or NULL engines")
+            engines = {"DEFAULT"} if kind == "DATABASE" else {"FUSE", "MEMORY", "NULL"}
+            if i + 2 >= len(tokens) or _identifier_value(tokens[i + 2]).upper() not in engines:
+                return SafetyResult(False, f"{kind} blocked: safe mode permits only managed storage engines")
         # CREATE TABLE t 's3://...' is valid too; its URI is not a key=value.
         if operation.startswith("CREATE") and depth == 0 and token.kind == "literal" and (i == 0 or tokens[i - 1].text != "="):
             return SafetyResult(False, "TABLE blocked: bare storage locations are unavailable in safe mode")
