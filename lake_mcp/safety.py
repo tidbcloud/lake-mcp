@@ -301,7 +301,7 @@ def _first_top_level_verb(sql: str, skip_cte_names: bool = False) -> str | None:
 
 
 def _check_read_only(sql: str, session_prefix: str) -> SafetyResult | None:
-    """Rule: Allow read-only queries on ANY object.
+    """Classify statements as read-only after applying the storage boundary.
 
     The read prefix must describe the *whole* statement: ``EXPLAIN ANALYZE
     DELETE ...`` and ``WITH ... DELETE ...`` are not read-only and fall through
@@ -820,7 +820,74 @@ def _check_remove_stage(sql: str, session_prefix: str) -> SafetyResult | None:
     return SafetyResult(False, "REMOVE blocked: safe mode cannot verify ownership of the underlying stage storage")
 
 
-def _check_storage_boundary(sql: str) -> SafetyResult | None:
+def _uses_caller_storage(tokens: list["_SQLToken"], *, relation_group: bool = False, depth: int = 0) -> bool:
+    """Check relation sources, including CTEs, subqueries and COPY transforms."""
+    if depth >= 64:
+        return True
+
+    in_query = relation_group
+    in_relations = relation_group
+    expect_source = relation_group
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        word = token.text.upper() if token.kind == "word" else ""
+        following = tokens[i + 1 : i + 3]
+        if expect_source:
+            # LATERAL can introduce a table function or a grouped query.
+            if word == "LATERAL":
+                i += 1
+                continue
+            if token.kind == "literal" and not token.text.startswith("'@"):
+                return True
+            if token.kind == "identifier" and token.text.startswith('"') and any(c in token.text for c in (":", "\\")):
+                # Double quotes may also denote strings in a warehouse SQL dialect.
+                return True
+            if token.kind in {"word", "identifier"} and following and following[0].text == "(":
+                name = _identifier_value(token).upper()
+                if name.startswith("READ_") or name in {"INFER_SCHEMA", "INSPECT_PARQUET", "LIST_STAGE"}:
+                    return True
+        if word == "CONNECTION" and [t.text for t in following] == ["=", ">"]:
+            return True
+        if token.kind == "symbol" and token.text == "(":
+            end = _group_end(tokens, i)
+            if end is None or _uses_caller_storage(tokens[i + 1 : end], relation_group=expect_source, depth=depth + 1):
+                return True
+            expect_source = False
+            i = end + 1
+            continue
+
+        if word in {"SELECT", "COPY", "INSERT", "REPLACE", "DELETE", "UPDATE", "MERGE"}:
+            in_query = True
+            in_relations = False
+        if word in {
+            "WHERE",
+            "GROUP",
+            "ORDER",
+            "HAVING",
+            "WINDOW",
+            "QUALIFY",
+            "LIMIT",
+            "OFFSET",
+            "UNION",
+            "EXCEPT",
+            "INTERSECT",
+            "SET",
+            "VALUES",
+            "WHEN",
+        }:
+            in_relations = False
+        distinct_from = word == "FROM" and i > 0 and tokens[i - 1].kind == "word" and tokens[i - 1].text.upper() == "DISTINCT"
+        if in_query and word in {"FROM", "JOIN", "USING"} and not distinct_from:
+            in_relations = True
+            expect_source = True
+        else:
+            expect_source = in_relations and token.kind == "symbol" and token.text == ","
+        i += 1
+    return False
+
+
+def _check_storage_boundary(sql: str, statement_tokens: list["_SQLToken"]) -> SafetyResult | None:
     """Reject caller-selected storage before any object-name rule can allow it.
 
     The warehouse owns internal storage placement. A sandbox-prefixed name does
@@ -828,6 +895,9 @@ def _check_storage_boundary(sql: str) -> SafetyResult | None:
     This is deliberately stateless: stages may predate this process, so even a
     prefixed stage is insufficient evidence to authorize REMOVE.
     """
+    if _uses_caller_storage(statement_tokens):
+        return SafetyResult(False, "Caller-selected storage locations, readers and connections are unavailable in safe mode")
+
     header = _sql_search(
         rf"^(CREATE(?:\s+OR\s+REPLACE)?|ALTER)\s+"
         rf"(CONNECTION|CATALOG|STAGE|DATABASE|TABLE|(?:TRANSIENT\s+)?DYNAMIC\s+TABLE)\s+"
@@ -1045,11 +1115,11 @@ def _check_single_statement(sql: str) -> SafetyResult:
         verb in {"GRANT", "REVOKE"} or re.match(r"^(?:CREATE(?:\s+OR\s+REPLACE)?|ALTER|DROP)\s+(?:USER|ROLE)\b", statement, re.IGNORECASE)
     ):
         return SafetyResult(False, "Account and role administration is available only in local stdio mode")
-    if network_write is False:
-        return _check_read_only(statement, session_prefix) or SafetyResult(False, "This caller is read-only")
-    storage_denial = _check_storage_boundary(statement)
+    storage_denial = _check_storage_boundary(statement, tokens)
     if storage_denial is not None:
         return storage_denial
+    if network_write is False:
+        return _check_read_only(statement, session_prefix) or SafetyResult(False, "This caller is read-only")
     routine_denial = _check_routine_definition(statement, session_prefix)
     if routine_denial is not None:
         return routine_denial

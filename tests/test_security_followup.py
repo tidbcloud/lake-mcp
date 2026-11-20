@@ -91,10 +91,11 @@ def test_http_authentication_reaches_transport(monkeypatch):
     import asyncio
 
     import httpx
-    from fastmcp import FastMCP
+
+    from lake_mcp.server import LakeMCP
 
     monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token-for-network-testing")
-    mcp = FastMCP("auth-regression", auth=build_auth())
+    mcp = LakeMCP("auth-regression", auth=build_auth())
 
     @mcp.tool
     def ping():
@@ -103,7 +104,7 @@ def test_http_authentication_reaches_transport(monkeypatch):
     async def exercise():
         app = mcp.http_app(stateless_http=True)
         async with app.router.lifespan_context(app):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://localhost") as client:
                 for token, expected in [(None, 401), ("wrong", 401), ("local-test-token-for-network-testing", 200)]:
                     headers = {"Accept": "application/json, text/event-stream"}
                     if token:
@@ -131,9 +132,25 @@ def test_asgi_mount_rejects_missing_auth_even_when_stdio_is_configured(monkeypat
     from lake_mcp.server import LakeMCP
 
     monkeypatch.setenv("LAKE_MCP_SERVER_TRANSPORT", "stdio")
-    monkeypatch.delenv("LAKE_MCP_ALLOW_INSECURE_HTTP", raising=False)
+    monkeypatch.setenv("LAKE_MCP_ALLOW_INSECURE_HTTP", "true")
     with pytest.raises(ValueError, match="HTTP/SSE requires configured authentication"):
         LakeMCP("embedded").http_app()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("transport_name", "path"), [("http", "/mcp"), ("sse", "/sse")])
+async def test_asgi_mount_requires_https_on_loopback(monkeypatch, transport_name, path):
+    import httpx
+
+    from lake_mcp.server import LakeMCP
+
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "local-test-token-for-network-testing")
+    app = LakeMCP("embedded", auth=build_auth()).http_app(transport=transport_name)
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+        response = await client.get(path)
+        assert response.status_code == 403
+        assert response.text == "Authenticated HTTPS required"
 
 
 @pytest.mark.asyncio
@@ -153,7 +170,7 @@ async def test_asgi_mount_enforces_network_sql_and_separates_sessions(monkeypatc
     headers = {"Accept": "application/json, text/event-stream", "Authorization": f"Bearer {token}"}
 
     async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(transport=transport, base_url="http://localhost", headers=headers) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="https://localhost", headers=headers) as client:
 
             async def session():
                 response = await client.post(
