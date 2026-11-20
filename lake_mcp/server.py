@@ -14,7 +14,7 @@ from fastmcp.server.dependencies import get_access_token, get_context
 from fastmcp.tools import Tool
 
 from .env import TransportType, get_config
-from .runtime_security import LakeJWTVerifier, build_auth, get_network_request, load_config_file, network_run_options
+from .runtime_security import LakeJWTVerifier, build_auth, get_network_request, load_config_file, network_middleware, network_run_options
 from .safety import audit_operation, check_network_sql, check_sql_safety, get_session_id, get_session_prefix
 
 # Constants
@@ -46,8 +46,7 @@ class LakeMCP(FastMCP):
         config = get_config()
         if self.routes_warehouse_accounts and config.local_mode:
             raise ValueError("Warehouse account mapping requires remote Lake connections")
-        options = network_run_options(config, self.auth)
-        return super().http_app(path=path, middleware=[*options["middleware"], *(middleware or [])], **kwargs)
+        return super().http_app(path=path, middleware=[*network_middleware(self.auth), *(middleware or [])], **kwargs)
 
 
 mcp = LakeMCP(SERVER_NAME, auth=build_auth())
@@ -612,7 +611,6 @@ def main():
             # Use the configured bind host (defaults to 127.0.0.1, can be set to 0.0.0.0)
             # and bind port (defaults to 8001)
             options = network_run_options(config, mcp.auth)
-            options.pop("middleware")  # Installed by LakeMCP.http_app.
             mcp.run(
                 transport=transport,
                 port=config.mcp_bind_port,

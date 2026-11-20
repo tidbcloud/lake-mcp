@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from lake_mcp import server
-from lake_mcp.runtime_security import build_auth
+from lake_mcp.runtime_security import build_auth, network_run_options
 
 ISSUER = "https://issuer.example"
 ALICE_DSN = "lake://alice:synthetic@warehouse.example/alice_db"
@@ -121,7 +121,7 @@ async def test_subject_routing_and_session_authorization(mapped_server, monkeypa
     headers = {"Accept": "application/json, text/event-stream"}
 
     async with app.router.lifespan_context(app):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", headers=headers) as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://localhost", headers=headers) as client:
 
             async def rpc(token, method, params=None, session=None):
                 request = {"jsonrpc": "2.0", "method": method}
@@ -221,10 +221,14 @@ async def test_sse_uses_the_authenticated_warehouse(mapped_server, monkeypatch):
     mcp.add_tool(server.Tool.from_function(server.execute_sql))
     monkeypatch.setattr(server, "mcp", mcp)
     app = mcp.http_app(transport="sse")
+    # The loopback test client represents the trusted TLS terminator.
+    monkeypatch.setenv("LAKE_MCP_TRUST_TLS_PROXY", "1")
+    monkeypatch.setenv("LAKE_MCP_TRUSTED_PROXY_IPS", "127.0.0.1")
+    options = network_run_options(SimpleNamespace(mcp_bind_host="127.0.0.1"), mcp.auth)
     async with asyncio.timeout(10):
         with socket.create_server(("127.0.0.1", 0)) as listener:
             url = f"http://127.0.0.1:{listener.getsockname()[1]}/sse"
-            listener_server = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False))
+            listener_server = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False, **options["uvicorn_config"]))
             task = asyncio.create_task(listener_server.serve(sockets=[listener]))
             try:
                 while not listener_server.started and not task.done():
@@ -232,7 +236,7 @@ async def test_sse_uses_the_authenticated_warehouse(mapped_server, monkeypatch):
                 assert listener_server.started
 
                 async def call(subject):
-                    async with Client(SSETransport(url, auth=mapped_server(subject))) as client:
+                    async with Client(SSETransport(url, headers={"X-Forwarded-Proto": "https"}, auth=mapped_server(subject))) as client:
                         result = await client.call_tool("execute_sql", {"sql": "SELECT 1"})
                         return result.structured_content["data"]
 

@@ -83,7 +83,7 @@ Add the standard config above to your Gemini CLI `settings.json`.
 
 | Scope | Rules |
 |-------|-------|
-| Read access | `SELECT/SHOW/DESCRIBE/EXPLAIN/LIST` on any object. `EXPLAIN`/`WITH` only stay read-only when the statement they wrap is a read. |
+| Read access | `SELECT/SHOW/DESCRIBE/EXPLAIN/LIST` on warehouse objects your role can access, subject to the storage boundary below. `EXPLAIN`/`WITH` only stay read-only when the statement they wrap is a read. |
 | Statement scope | One statement per call. Stacked `;`-separated statements are rejected; use `execute_multi_sql` for batches. |
 | Tool arguments | `database`/`table`/`stage` accept plain identifiers or quoted ones (`` `my-db` ``, `"my-db"`) plus Databend's `$` character; `@~` / `@%table` stages and non-ASCII stage paths are supported. `url` and `connection_name` are escaped as string literals, and `filter` accepts a column compared with one scalar literal. Argument validation applies even when `LAKE_MCP_SAFE_MODE=false`. |
 | Write access | Only objects prefixed with `mcp_sandbox_{session_id}_*`. |
@@ -95,6 +95,7 @@ Add the standard config above to your Gemini CLI `settings.json`.
 
 - In safe mode, use `create_stage(name)` without a URL or connection to create an internal stage. `CREATE STAGE ... FILE_FORMAT=(...) COMMENT='...'` remains available through `execute_sql`. `create_stage(name, url, connection_name)` retains its arguments for trusted local administration, but safe mode rejects external storage bindings.
 - Safe mode allows managed/default tables and explicit `ENGINE=FUSE`, `MEMORY` or `NULL`; `STORAGE_FORMAT` remains available. It rejects storage location/connection overrides, database default storage connection/path changes, attached data or snapshot paths, bare storage URIs and external engines, including `CREATE OR REPLACE` and deferred SQL bodies. Stage configuration changes through `ALTER STAGE` are also restricted to the internal-stage options above.
+- Safe mode blocks raw storage locations in query sources and `COPY INTO` imports, direct storage reader functions, and caller-supplied connection overrides on stage reads. Use managed tables or stages already configured by your warehouse administrator and authorized for your warehouse role.
 - `REMOVE` is unavailable in safe mode. A stage's prefix alone cannot prove that deleting its files is safe. Use a separately authorized storage cleanup procedure; do not disable safe mode for an untrusted agent.
 - Trusted local administration retains these operations only with both `LAKE_MCP_SAFE_MODE=false` and `LAKE_MCP_ALLOW_STDIO_ADMIN=1`. HTTP/SSE always enforces the sandbox and cannot use this opt-out.
 
@@ -196,14 +197,17 @@ role administration. Disabling safe mode also requires that opt-in.
 Privileged operations log the principal, transport, and operation type.
 Use `LAKE_MCP_AUTH_TOKEN_FILE` instead of the environment token if the
 single-owner network listener needs live token rotation.
-Stdio remains local and needs no network token. For an intentionally anonymous,
-read-only development listener, set `LAKE_MCP_ALLOW_INSECURE_HTTP=true` and
-bind to loopback.
+Stdio remains local and needs no network token. HTTP and SSE require configured
+authentication and HTTPS on every bind address, including loopback.
+For local development, use stdio or configure HTTPS and a bearer token.
 
-Non-loopback listeners require `LAKE_MCP_TLS_CERTFILE` and
-`LAKE_MCP_TLS_KEYFILE`. When a trusted proxy terminates TLS, use a loopback
-listener where possible. Set `LAKE_MCP_TRUST_TLS_PROXY=1` only when the cleartext
-listener is isolated behind that proxy. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
+For direct TLS, set `LAKE_MCP_TLS_CERTFILE` and `LAKE_MCP_TLS_KEYFILE`.
+For TLS termination at a reverse proxy, set `LAKE_MCP_TRUST_TLS_PROXY=1`
+and set `LAKE_MCP_TRUSTED_PROXY_IPS` to the comma-separated IP addresses
+of the proxy peers. Isolate the cleartext backend so only those proxies can
+connect, and configure each proxy to overwrite `X-Forwarded-Proto` with the
+actual client connection scheme. Embedded ASGI deployments must configure this
+trust boundary in their own HTTP server. `LAKE_MCP_ALLOWED_HOSTS` accepts exact
 hostnames only.
 
 HTTP and SSE sessions get distinct write sandbox prefixes. In single-owner mode,

@@ -19,33 +19,49 @@ def test_required_body_and_session_entropy():
     assert len(SESSION_ID) == 32
 
 
-def test_network_requires_actual_mounted_auth(monkeypatch):
-    config = SimpleNamespace(mcp_bind_host="0.0.0.0")
-    monkeypatch.delenv("LAKE_MCP_ALLOW_INSECURE_HTTP", raising=False)
-    with pytest.raises(ValueError, match="requires"):
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_network_requires_actual_mounted_auth_and_tls(monkeypatch, host):
+    config = SimpleNamespace(mcp_bind_host=host)
+    monkeypatch.setenv("LAKE_MCP_ALLOW_INSECURE_HTTP", "true")
+    with pytest.raises(ValueError, match="configured authentication"):
         network_run_options(config, None)
     monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "test-network-token-at-least-32-bytes")
-    auth = build_auth()
     with pytest.raises(ValueError, match="requires TLS"):
-        network_run_options(config, auth)
+        network_run_options(config, build_auth())
+
+
+def test_network_proxy_requires_explicit_peer_ips(monkeypatch):
+    config = SimpleNamespace(mcp_bind_host="0.0.0.0")
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "test-network-token-at-least-32-bytes")
     monkeypatch.setenv("LAKE_MCP_TRUST_TLS_PROXY", "1")
-    assert network_run_options(config, auth)["host"] == "0.0.0.0"
+    auth = build_auth()
+    for peers in ("", "*", "192.0.2.0/24"):
+        monkeypatch.setenv("LAKE_MCP_TRUSTED_PROXY_IPS", peers)
+        with pytest.raises(ValueError, match="explicit proxy IP"):
+            network_run_options(config, auth)
+    monkeypatch.setenv("LAKE_MCP_TRUSTED_PROXY_IPS", "192.0.2.1, ::1")
+    assert network_run_options(config, auth)["uvicorn_config"] == {
+        "proxy_headers": True,
+        "forwarded_allow_ips": "192.0.2.1,::1",
+    }
     monkeypatch.setenv("LAKE_MCP_ALLOWED_HOSTS", "*.example.com")
     with pytest.raises(ValueError, match="explicit hosts"):
         network_run_options(config, auth)
 
 
-@pytest.mark.parametrize("host", ["", "0.0.0.0", "::", "192.0.2.1", "local.example", " 127.0.0.1 "])
-def test_anonymous_network_rejects_non_loopback_hosts(monkeypatch, host):
-    monkeypatch.setenv("LAKE_MCP_ALLOW_INSECURE_HTTP", "true")
-    with pytest.raises(ValueError, match="loopback"):
-        network_run_options(SimpleNamespace(mcp_bind_host=host), None)
-
-
-@pytest.mark.parametrize(("host", "expected"), [("localhost", "127.0.0.1"), ("127.0.0.1", "127.0.0.1"), ("::1", "::1")])
-def test_anonymous_network_binds_to_loopback(monkeypatch, host, expected):
-    monkeypatch.setenv("LAKE_MCP_ALLOW_INSECURE_HTTP", "true")
-    assert network_run_options(SimpleNamespace(mcp_bind_host=host), None)["host"] == expected
+def test_network_native_tls_disables_forwarded_headers(monkeypatch, tmp_path):
+    config = SimpleNamespace(mcp_bind_host="127.0.0.1")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert.touch()
+    key.touch()
+    monkeypatch.setenv("LAKE_MCP_AUTH_TOKEN", "test-network-token-at-least-32-bytes")
+    monkeypatch.setenv("LAKE_MCP_TLS_CERTFILE", str(cert))
+    monkeypatch.setenv("LAKE_MCP_TLS_KEYFILE", str(key))
+    assert network_run_options(config, build_auth())["uvicorn_config"] == {
+        "ssl_certfile": str(cert),
+        "ssl_keyfile": str(key),
+        "proxy_headers": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -83,9 +99,7 @@ def test_network_sql_limits_read_only_and_account_administration():
     assert not check_network_sql(f"INSERT INTO {prefix}t VALUES (1)", allow_write=False).allowed
     assert check_network_sql(f"INSERT INTO {prefix}t VALUES (1)", allow_write=True).allowed
     assert not check_network_sql(f"GRANT ROLE {prefix}r TO {prefix}u", allow_write=True).allowed
-    assert not check_network_sql(
-        f"CREATE TASK {prefix}t AS GRANT ROLE {prefix}r TO {prefix}u", allow_write=True
-    ).allowed
+    assert not check_network_sql(f"CREATE TASK {prefix}t AS GRANT ROLE {prefix}r TO {prefix}u", allow_write=True).allowed
 
 
 def test_safe_mode_does_not_allow_external_code_or_procedure_writes():

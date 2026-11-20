@@ -83,6 +83,53 @@ def test_managed_sandbox_and_read_operations_remain_available(statement):
     assert check_network_sql(sql, allow_write=True).allowed
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT * FROM 's3://example.invalid/data/'",
+        'SELECT * FROM "https://example.invalid/data"',
+        "SELECT * FROM @named_stage (CONNECTION => (CONNECTION_NAME='another_connection'))",
+        "EXPLAIN SELECT * FROM read_parquet('https://example.invalid/data.parquet')",
+        "WITH c AS (SELECT * FROM 's3://example.invalid/data/') SELECT * FROM c",
+        "SELECT * FROM warehouse.t, ('s3://example.invalid/data/')",
+        "SELECT * FROM warehouse.t JOIN 's3://example.invalid/data/' ON TRUE",
+    ],
+)
+def test_storage_sources_rejected_for_read_only_callers(statement):
+    assert "Caller-selected storage" in check_network_sql(statement, allow_write=False).reason
+    assert "Caller-selected storage" in check_network_sql(statement, allow_write=True).reason
+    assert "Caller-selected storage" in check_sql_safety(statement).reason
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "COPY INTO {p}t FROM 's3://example.invalid/data/'",
+        "COPY INTO {p}t (id) FROM (SELECT id FROM 's3://example.invalid/data/')",
+        "CREATE PIPE {p}pipe AS COPY INTO {p}t FROM 's3://example.invalid/data/'",
+        "CREATE VIEW {p}v AS SELECT * FROM 's3://example.invalid/data/'",
+    ],
+)
+def test_storage_sources_rejected_before_driver(monkeypatch, statement):
+    executed = _record_driver(monkeypatch)
+    result = server.execute_sql(statement.format(p=get_session_prefix()))
+    assert result["status"] == "error"
+    assert "Caller-selected storage" in result["message"]
+    assert executed == []
+
+
+def test_stage_copy_and_non_storage_reads_remain_allowed():
+    prefix = get_session_prefix()
+    for sql in (
+        "SELECT * FROM @named_stage/data/",
+        "SELECT * FROM numbers(3)",
+        "SELECT * FROM (SELECT 1, 's3://example.invalid/data/')",
+        "SELECT value IS DISTINCT FROM 's3://example.invalid/data/' FROM warehouse.t",
+    ):
+        assert check_network_sql(sql, allow_write=False).allowed
+    assert check_network_sql(f"COPY INTO {prefix}t FROM @named_stage/data/", allow_write=True).allowed
+
+
 def _record_driver(monkeypatch, *, safe_mode=True):
     executed = []
     monkeypatch.setattr(server, "get_config", lambda: SimpleNamespace(safe_mode=safe_mode, query_timeout=1))

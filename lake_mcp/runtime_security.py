@@ -236,58 +236,51 @@ def get_network_request():
 
 
 class NetworkTransportMiddleware:
-    def __init__(self, app, *, anonymous):
+    def __init__(self, app):
         self.app = app
-        self.anonymous = anonymous
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            peer = scope.get("client")
-            loopback = peer is not None and _is_loopback(peer[0])
-            if not loopback and (self.anonymous or scope["scheme"] != "https"):
-                response = PlainTextResponse("Authenticated HTTPS required", status_code=403)
-                await response(scope, receive, send)
-                return
+        if scope["type"] == "http" and scope["scheme"] != "https":
+            response = PlainTextResponse("Authenticated HTTPS required", status_code=403)
+            await response(scope, receive, send)
+            return
         await self.app(scope, receive, send)
 
 
-def network_run_options(config, auth):
-    """Validate the actual mounted authenticator before opening a listener."""
+def network_middleware(auth):
+    """Enforce authentication and HTTPS for CLI and embedded HTTP/SSE apps."""
     from starlette.middleware import Middleware
     from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-    insecure = os.environ.get("LAKE_MCP_ALLOW_INSECURE_HTTP", "false").strip().lower()
-    if insecure not in {"true", "false", "1", "0", "yes", "no", "on", "off"}:
-        raise ValueError("Invalid LAKE_MCP_ALLOW_INSECURE_HTTP; use true or false")
-    if auth is None and insecure not in {"true", "1", "yes", "on"}:
-        raise ValueError(
-            "HTTP/SSE requires configured authentication; local development may explicitly set LAKE_MCP_ALLOW_INSECURE_HTTP=true"
-        )
-    host = config.mcp_bind_host
-    loopback = _is_loopback(host)
     if auth is None:
-        if not loopback:
-            raise ValueError("Anonymous HTTP/SSE requires a loopback LAKE_MCP_BIND_HOST")
-        if host == "localhost":
-            host = "127.0.0.1"
+        raise ValueError("HTTP/SSE requires configured authentication")
+    hosts = [h.strip() for h in os.environ.get("LAKE_MCP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()]
+    if not hosts or any("*" in h for h in hosts):
+        raise ValueError("LAKE_MCP_ALLOWED_HOSTS must list explicit hosts")
+    return [
+        Middleware(TrustedHostMiddleware, allowed_hosts=hosts),
+        Middleware(NetworkTransportMiddleware),
+    ]
 
+
+def network_run_options(config, auth):
+    """Require TLS on the listener or an explicitly trusted TLS terminator."""
+    network_middleware(auth)
     cert = os.environ.get("LAKE_MCP_TLS_CERTFILE")
     key = os.environ.get("LAKE_MCP_TLS_KEYFILE")
     if bool(cert) != bool(key) or (cert and not (Path(cert).is_file() and Path(key).is_file())):
         raise ValueError("LAKE_MCP_TLS_CERTFILE and LAKE_MCP_TLS_KEYFILE must name existing files")
-    if not loopback and not cert and os.environ.get("LAKE_MCP_TRUST_TLS_PROXY") != "1":
-        raise ValueError("Non-loopback HTTP/SSE requires TLS files or LAKE_MCP_TRUST_TLS_PROXY=1")
 
-    hosts = [h.strip() for h in os.environ.get("LAKE_MCP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]").split(",") if h.strip()]
-    if not hosts or any("*" in h for h in hosts):
-        raise ValueError("LAKE_MCP_ALLOWED_HOSTS must list explicit hosts")
-    options = {
-        "host": host,
-        "middleware": [
-            Middleware(TrustedHostMiddleware, allowed_hosts=hosts),
-            Middleware(NetworkTransportMiddleware, anonymous=auth is None),
-        ],
-    }
+    uvicorn_config = {"proxy_headers": False}
     if cert:
-        options["uvicorn_config"] = {"ssl_certfile": cert, "ssl_keyfile": key}
-    return options
+        uvicorn_config.update(ssl_certfile=cert, ssl_keyfile=key)
+    elif os.environ.get("LAKE_MCP_TRUST_TLS_PROXY") == "1":
+        peers = os.environ.get("LAKE_MCP_TRUSTED_PROXY_IPS", "").split(",")
+        try:
+            trusted_ips = [str(ip_address(peer.strip())) for peer in peers]
+        except ValueError:
+            raise ValueError("LAKE_MCP_TRUSTED_PROXY_IPS must list explicit proxy IP addresses") from None
+        uvicorn_config.update(proxy_headers=True, forwarded_allow_ips=",".join(trusted_ips))
+    else:
+        raise ValueError("HTTP/SSE requires TLS files or an explicitly trusted TLS proxy")
+    return {"host": config.mcp_bind_host, "uvicorn_config": uvicorn_config}
